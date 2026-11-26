@@ -1732,11 +1732,12 @@
         });
         actionOverlay.append(preheatTrack,actionLine,actionSource,actionDestination,alternateSource,alternateDestination,actionHint);
         window.lucide?.createIcons();
-        let verifying=false;
+        let verifying=false, celebrationTimer;
         const finished=()=>step>verificationStep||step===verificationStep&&!verifying;
         const currentAction=()=>finished()?null:actions[step]?.[actionIndex];
         const previousStep=el('previous-step'), mistakePreviousStep=el('mistake-previous-step');
         const verificationButton=el('verify-oxygen');
+        const celebration=el('celebration');
         const confirmBubbles=el('confirm-bubbles');
         const guidedButton=el('guided-mode'),freeButton=el('free-mode');
         function setLearningMode(free){
@@ -1759,6 +1760,8 @@
         let suppressActionClick=0;
         let preheatGuide, alternateSelected=false;
         function resetExperiment(to=0){
+          clearTimeout(celebrationTimer);
+          if(celebration.open) celebration.close();
           step=to;time=0;phase=-1;selected=-1;actionIndex=0;steadyAt=0;verifying=false;
           preheatX=lampX;preheatVisited=0;
           reaction=null;heldSource=false;
@@ -1881,6 +1884,9 @@
           reaction=null;heldSource=false;alternateSelected=false;actionIndex++;
           if(actionIndex>=actions[step].length){
             step++;actionIndex=0;refreshProcedure();
+            if(step===verificationStep+1){
+              celebrationTimer=setTimeout(()=>celebration.showModal(),850);
+            }
           }
           enterAction();
           if(keyboard&&reaction) reaction.keyboard=true;
