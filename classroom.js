@@ -208,7 +208,6 @@ function startClassroom() {
     el('load-error').hidden = true;
     room.inert = true;
     lab.hidden = false;
-    el('lab-title').textContent = lesson.title;
     if (push) history.pushState({ station: id, mode }, '', `#${id}`);
     replaceExperiment(mode === 'free' && lesson.freeUrl ? lesson.freeUrl : lesson.url);
     el('back').focus({ preventScroll: true });

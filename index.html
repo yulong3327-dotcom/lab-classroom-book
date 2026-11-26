@@ -115,11 +115,8 @@
     </div>
   </dialog>
   <section id="lab" aria-label="实验操作" hidden>
-    <header class="lab-bar">
-      <button id="back" type="button"><i data-lucide="arrow-left" aria-hidden="true"></i>返回教室</button>
-      <strong id="lab-title"></strong>
-      <div id="load-error" role="status" hidden>实验暂时打不开</div>
-    </header>
+    <button id="back" type="button" aria-label="返回教室" title="返回教室"><i data-lucide="arrow-left" aria-hidden="true"></i><span>返回教室</span></button>
+    <div id="load-error" role="status" hidden>实验暂时打不开</div>
     <iframe id="experiment" title="实验操作"></iframe>
   </section>
 </body>
