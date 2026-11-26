@@ -1,0 +1,640 @@
+{
+  "schemaVersion": 1,
+  "assets": [
+    {
+      "id": "dc-power-supply",
+      "title": "直流电源（6 V）",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/dc-power-supply/v1/dc-power-supply.glb",
+      "preview": "assets/dc-power-supply/v1/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "p": [
+          0.052,
+          0.056,
+          0.021
+        ],
+        "n": [
+          -0.052,
+          0.056,
+          0.021
+        ]
+      }
+    },
+    {
+      "id": "knife-switch",
+      "title": "单刀开关",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/knife-switch/v1/knife-switch.glb",
+      "preview": "assets/knife-switch/v1/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "p": [
+          -0.066,
+          0.032,
+          0.017
+        ],
+        "n": [
+          0.066,
+          0.032,
+          0.017
+        ],
+        "lever": [
+          0.039,
+          0.1,
+          -0.009
+        ]
+      }
+    },
+    {
+      "id": "fixed-resistor",
+      "title": "定值电阻（10 Ω）",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/fixed-resistor/v1/fixed-resistor.glb",
+      "preview": "assets/fixed-resistor/v1/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "p": [
+          -0.05,
+          0.031,
+          0
+        ],
+        "n": [
+          0.05,
+          0.031,
+          0
+        ]
+      }
+    },
+    {
+      "id": "sliding-rheostat",
+      "title": "滑动变阻器（0–50 Ω）",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/sliding-rheostat/v1/sliding-rheostat.glb",
+      "preview": "assets/sliding-rheostat/v1/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "p": [
+          -0.089,
+          0.031,
+          0.029
+        ],
+        "n": [
+          -0.089,
+          0.031,
+          -0.029
+        ],
+        "coil-other": [
+          0.089,
+          0.031,
+          0.029
+        ],
+        "slider-other": [
+          0.089,
+          0.031,
+          -0.029
+        ],
+        "slider-min": [
+          -0.062,
+          0.0905,
+          -0.007
+        ],
+        "slider-max": [
+          0.062,
+          0.0905,
+          -0.007
+        ]
+      }
+    },
+    {
+      "id": "analog-ammeter",
+      "title": "学校实验电流表（0–0.6 A）",
+      "version": 2,
+      "status": "candidate",
+      "model": "assets/analog-ammeter/v2/analog-ammeter.glb",
+      "preview": "assets/analog-ammeter/v2/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "p": [
+          0.035,
+          0.038,
+          0.035
+        ],
+        "n": [
+          -0.035,
+          0.038,
+          0.035
+        ]
+      }
+    },
+    {
+      "id": "analog-voltmeter",
+      "title": "学校实验电压表（0–6 V）",
+      "version": 2,
+      "status": "candidate",
+      "model": "assets/analog-voltmeter/v2/analog-voltmeter.glb",
+      "preview": "assets/analog-voltmeter/v2/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "p": [
+          0.035,
+          0.038,
+          0.035
+        ],
+        "n": [
+          -0.035,
+          0.038,
+          0.035
+        ]
+      }
+    },
+    {
+      "id": "battery-single",
+      "title": "单节电池座",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/battery-single/v1/battery-single.glb",
+      "preview": "assets/battery-single/v1/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "n": [
+          0.0455,
+          0.029,
+          0.012
+        ],
+        "p": [
+          -0.0455,
+          0.029,
+          0.012
+        ]
+      }
+    },
+    {
+      "id": "battery-pack",
+      "title": "双节电池组",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/battery-pack/v1/battery-pack.glb",
+      "preview": "assets/battery-pack/v1/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "n": [
+          0.0765,
+          0.029,
+          0.012
+        ],
+        "p": [
+          -0.0765,
+          0.029,
+          0.012
+        ]
+      }
+    },
+    {
+      "id": "switch-spdt",
+      "title": "单刀双掷开关",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/switch-spdt/v1/switch-spdt.glb",
+      "preview": "assets/switch-spdt/v1/preview.png",
+      "anchors": {
+        "b": [
+          0.059,
+          0.032,
+          0.018
+        ],
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "lever": [
+          0,
+          0.04,
+          -0.009
+        ],
+        "n": [
+          -0.059,
+          0.032,
+          0.018
+        ],
+        "p": [
+          0,
+          0.032,
+          0.018
+        ]
+      }
+    },
+    {
+      "id": "lamp-bulb",
+      "title": "小灯泡",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/lamp-bulb/v1/lamp-bulb.glb",
+      "preview": "assets/lamp-bulb/v1/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "n": [
+          0.045,
+          0.029,
+          0.014
+        ],
+        "p": [
+          -0.045,
+          0.029,
+          0.014
+        ]
+      }
+    },
+    {
+      "id": "led",
+      "title": "发光二极管",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/led/v1/led.glb",
+      "preview": "assets/led/v1/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "n": [
+          0.031,
+          0.029,
+          0.009
+        ],
+        "p": [
+          -0.031,
+          0.029,
+          0.009
+        ]
+      }
+    },
+    {
+      "id": "solenoid",
+      "title": "通电螺线管",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/solenoid/v1/solenoid.glb",
+      "preview": "assets/solenoid/v1/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "n": [
+          0.039,
+          0.029,
+          0.017
+        ],
+        "p": [
+          -0.039,
+          0.029,
+          0.017
+        ]
+      }
+    },
+    {
+      "id": "bell",
+      "title": "电铃",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/bell/v1/bell.glb",
+      "preview": "assets/bell/v1/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "n": [
+          0.043,
+          0.029,
+          0.019
+        ],
+        "p": [
+          -0.043,
+          0.029,
+          0.019
+        ]
+      }
+    },
+    {
+      "id": "buzzer",
+      "title": "两脚蜂鸣器",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/buzzer/v1/buzzer.glb",
+      "preview": "assets/buzzer/v1/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "n": [
+          0.027,
+          0.029,
+          0.012
+        ],
+        "p": [
+          -0.027,
+          0.029,
+          0.012
+        ]
+      }
+    },
+    {
+      "id": "motor-fan",
+      "title": "电动机（风扇）",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/motor-fan/v1/motor-fan.glb",
+      "preview": "assets/motor-fan/v1/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "n": [
+          0.044,
+          0.029,
+          0.018
+        ],
+        "p": [
+          -0.044,
+          0.029,
+          0.018
+        ]
+      }
+    },
+    {
+      "id": "resistance-wire",
+      "title": "导体电阻实验板",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/resistance-wire/v1/resistance-wire.glb",
+      "preview": "assets/resistance-wire/v1/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "n": [
+          0.08,
+          0.031,
+          0.016
+        ],
+        "p": [
+          -0.08,
+          0.031,
+          0.016
+        ]
+      }
+    },
+    {
+      "id": "resistance-box",
+      "title": "电阻箱",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/resistance-box/v1/resistance-box.glb",
+      "preview": "assets/resistance-box/v1/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "n": [
+          0.037,
+          0.056,
+          0.036
+        ],
+        "p": [
+          -0.037,
+          0.056,
+          0.036
+        ]
+      }
+    },
+    {
+      "id": "pencil-rheostat",
+      "title": "铅笔芯变阻器",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/pencil-rheostat/v1/pencil-rheostat.glb",
+      "preview": "assets/pencil-rheostat/v1/preview.png",
+      "anchors": {
+        "b": [
+          0.074,
+          0.031,
+          0.023
+        ],
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "c": [
+          -0.074,
+          0.031,
+          -0.024
+        ],
+        "n": [
+          0.074,
+          0.031,
+          -0.024
+        ],
+        "p": [
+          -0.074,
+          0.031,
+          0.023
+        ],
+        "slider-max": [
+          0.05,
+          0.051,
+          -0.012
+        ],
+        "slider-min": [
+          -0.05,
+          0.051,
+          -0.012
+        ]
+      }
+    },
+    {
+      "id": "potentiometer",
+      "title": "三端旋钮电位器",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/potentiometer/v1/potentiometer.glb",
+      "preview": "assets/potentiometer/v1/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "c": [
+          0,
+          0.031,
+          0.024
+        ],
+        "n": [
+          0.032,
+          0.031,
+          0.024
+        ],
+        "p": [
+          -0.032,
+          0.031,
+          0.024
+        ]
+      }
+    },
+    {
+      "id": "joule-calorimeter",
+      "title": "焦耳定律量热器",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/joule-calorimeter/v1/joule-calorimeter.glb",
+      "preview": "assets/joule-calorimeter/v1/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "n": [
+          0.05,
+          0.029,
+          0.022
+        ],
+        "p": [
+          -0.05,
+          0.029,
+          0.022
+        ]
+      }
+    },
+    {
+      "id": "motor-bare",
+      "title": "电动机（裸机）",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/motor-bare/v1/motor-bare.glb",
+      "preview": "assets/motor-bare/v1/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "n": [
+          0.036,
+          0.029,
+          0.021
+        ],
+        "p": [
+          -0.036,
+          0.029,
+          0.021
+        ]
+      }
+    },
+    {
+      "id": "galvanometer",
+      "title": "灵敏电流计",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/galvanometer/v1/galvanometer.glb",
+      "preview": "assets/galvanometer/v1/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "n": [
+          -0.032,
+          0.038,
+          0.035
+        ],
+        "p": [
+          0.032,
+          0.038,
+          0.035
+        ]
+      }
+    },
+    {
+      "id": "multimeter",
+      "title": "指针式多用电表",
+      "version": 1,
+      "status": "candidate",
+      "model": "assets/multimeter/v1/multimeter.glb",
+      "preview": "assets/multimeter/v1/preview.png",
+      "anchors": {
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "n": [
+          -0.031,
+          0.044,
+          0.061
+        ],
+        "p": [
+          0.031,
+          0.044,
+          0.061
+        ]
+      }
+    }
+  ]
+}

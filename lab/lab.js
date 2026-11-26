@@ -1,0 +1,2656 @@
+(() => {
+      const root = document.getElementById('oxygen-lab-3d');
+      const el = name => root.querySelector('[data-lab="' + name + '"]');
+      if (/^https?:$/.test(location.protocol)) el('site-brand').href = './platform/';
+      window.lucide?.createIcons();
+      try {
+        build(window.THREE);
+      } catch (error) {
+        el('fallback').textContent = '暂时无法加载 3D 模型，请检查浏览器的 WebGL 设置。';
+        console.error(error);
+      }
+
+      function build(T) {
+        const V = (x,y,z) => new T.Vector3(x,y,z);
+        const stage = el('stage'), canvas = el('canvas');
+        const scene = new T.Scene();
+        const camera = new T.OrthographicCamera(-1,1,1,-1,.1,100);
+        const renderer = new T.WebGLRenderer({canvas, alpha:true, antialias:true, preserveDrawingBuffer:true});
+        renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.7));
+        renderer.setClearColor(0, 0);
+        renderer.outputColorSpace = T.SRGBColorSpace;
+        renderer.toneMapping = T.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.05;
+        const panels = [
+          {direction:V(-.48,.65,.59).normalize(), width:.30, height:.45, energy:3.6, rgb:[1,.97,.91]},
+          {direction:V(.52,.58,-.63).normalize(), width:.24, height:.46, energy:4.1, rgb:[.84,.92,1]},
+          {direction:V(.04,.95,.30).normalize(), width:.52, height:.22, energy:2.0, rgb:[.97,.99,1]}
+        ];
+        for(const panel of panels){
+          panel.across=V(0,1,0).cross(panel.direction).normalize();
+          panel.up=panel.direction.clone().cross(panel.across).normalize();
+        }
+        // Bake a studio environment locally so both the bench and thumbnails work offline.
+        function studioEnvironment(){
+          const width=256, height=128, pixels=new Uint16Array(width*height*4);
+          const direction=V(0,0,0), half=T.DataUtils.toHalfFloat;
+          const edge=(value,size)=>1-T.MathUtils.smoothstep(Math.abs(value),size*.78,size);
+          for(let y=0;y<height;y++){
+            const latitude=((y+.5)/height-.5)*Math.PI;
+            for(let x=0;x<width;x++){
+              const longitude=((x+.5)/width-.5)*2*Math.PI;
+              direction.set(Math.cos(latitude)*Math.cos(longitude),Math.sin(latitude),Math.cos(latitude)*Math.sin(longitude));
+              const ambient=.095+.22*T.MathUtils.smoothstep(direction.y,-.25,.85);
+              let r=ambient*.94, g=ambient*.98, b=ambient;
+              for(const panel of panels){
+                if(direction.dot(panel.direction)<.64) continue;
+                const amount=panel.energy*edge(direction.dot(panel.across),panel.width)*edge(direction.dot(panel.up),panel.height);
+                r+=amount*panel.rgb[0];g+=amount*panel.rgb[1];b+=amount*panel.rgb[2];
+              }
+              const i=(y*width+x)*4;
+              pixels[i]=half(r);pixels[i+1]=half(g);pixels[i+2]=half(b);pixels[i+3]=half(1);
+            }
+          }
+          const map=new T.DataTexture(pixels,width,height,T.RGBAFormat,T.HalfFloatType);
+          map.mapping=T.EquirectangularReflectionMapping;
+          map.minFilter=map.magFilter=T.LinearFilter;
+          map.needsUpdate=true;
+          const pmrem=new T.PMREMGenerator(renderer);
+          const target=pmrem.fromEquirectangular(map);
+          pmrem.dispose();map.dispose();
+          return target;
+        }
+        const environment=studioEnvironment();
+        scene.environment=environment.texture;
+        scene.add(new T.HemisphereLight(0xf3f7ff,0x889099,.47));
+        const key = new T.DirectionalLight(0xfff0dc, 1.56);
+        key.position.copy(panels[0].direction).multiplyScalar(10);
+        scene.add(key);
+        const rim = new T.DirectionalLight(0xdceaff, .55);
+        rim.position.copy(panels[1].direction).multiplyScalar(10);
+        scene.add(rim);
+        const flameLight = new T.PointLight(0xffa45f,0,2.2,2);
+        scene.add(flameLight);
+
+        const probe = document.createElement('span');
+        probe.hidden = true;
+        root.append(probe);
+        const css = (token, fallback) => {
+          probe.style.color = 'var(' + token + ', ' + fallback + ')';
+          const value = getComputedStyle(probe).color;
+          if (/^rgba?\(/.test(value)) return new T.Color(value);
+          const sample = document.createElement('canvas').getContext('2d', {willReadFrequently:true});
+          sample.fillStyle = value;
+          sample.fillRect(0,0,1,1);
+          const d = sample.getImageData(0,0,1,1).data;
+          return new T.Color().setRGB(d[0]/255,d[1]/255,d[2]/255,T.SRGBColorSpace);
+        };
+        const palette = () => {
+          const fg=css('--foreground','#18242d'), bg=css('--background','#ffffff');
+          return {fg,bg,muted:css('--muted-foreground','#627483'), water:css('--lab-water','#2983c3'),
+            oxygen:css('--lab-oxygen','#068673'), purple:css('--lab-grains','#7947a5'),
+            heat:css('--lab-heat','#ec711e'), yellow:css('--yellow','#f8be39'), light:bg.getHSL({}).l>.5};
+        };
+        let pal = palette();
+        const themed = [];
+        const color = (mat, fn) => {
+          mat.color.copy(fn(pal));
+          themed.push(p => mat.color.copy(fn(p)));
+          return mat;
+        };
+        const standard = (fn, props={}) => color(new T.MeshStandardMaterial({roughness:.52,...props}),fn);
+        const flat = (fn, props={}) => color(new T.MeshBasicMaterial(props),fn);
+        const mix = (a,b,t) => a.clone().lerp(b,t);
+        function mesh(geo, mat, x=0,y=0,z=0, parent=scene, order=0) {
+          const ob=new T.Mesh(geo,mat);
+          ob.position.set(x,y,z);
+          ob.renderOrder=order;
+          parent.add(ob);
+          return ob;
+        }
+        const box = (w,h,d,mat,x,y,z,parent=scene,order=0) =>
+          mesh(new T.BoxGeometry(w,h,d),mat,x,y,z,parent,order);
+        const cyl = (rt,rb,h,mat,x,y,z,parent=scene,order=0,n=40) =>
+          mesh(new T.CylinderGeometry(rt,rb,h,n),mat,x,y,z,parent,order);
+        const line = (coords, fn, opacity=1, parent=scene, order=0, loop=false) => {
+          const mat=color(new T.LineBasicMaterial({transparent:opacity<1,opacity,depthWrite:opacity===1}),fn);
+          const geo=new T.BufferGeometry().setFromPoints(coords);
+          const ob=loop ? new T.LineLoop(geo,mat) : new T.Line(geo,mat);
+          ob.renderOrder=order; parent.add(ob); return ob;
+        };
+        const torus = (r,t,mat,x,y,z,parent=scene,order=0) =>
+          mesh(new T.TorusGeometry(r,t,10,56),mat,x,y,z,parent,order);
+        const lathe = (profile, mat, x,y,z,parent=scene,order=0) =>
+          mesh(new T.LatheGeometry(profile.map(([r,h])=>new T.Vector2(r,h)),64),mat,x,y,z,parent,order);
+        function blenderMesh(name,material,x,y,z,parent=scene,order=0){
+          const data=globalThis.oxygenGlassModels[name];
+          const unpack=base64=>Uint8Array.from(atob(base64),letter=>letter.charCodeAt(0)).buffer;
+          const geometry=new T.BufferGeometry();
+          geometry.setAttribute('position',new T.BufferAttribute(new Float32Array(unpack(data.position)),3));
+          geometry.setAttribute('normal',new T.BufferAttribute(new Int8Array(unpack(data.normal)),3,true));
+          if(data.uv) geometry.setAttribute('uv',new T.BufferAttribute(new Float32Array(unpack(data.uv)),2));
+          geometry.setIndex(new T.BufferAttribute(new Uint16Array(unpack(data.index)),1));
+          const object=mesh(geometry,material,x,y,z,parent,order);
+          object.userData.blenderModel=name;
+          return object;
+        }
+        function blenderSurface(name, options={}) {
+          const {baseColor,roughness,metalness,clearcoat} = globalThis.oxygenGlassModels[name].material;
+          const params={color:new T.Color(...baseColor),roughness,metalness,...options};
+          return clearcoat
+            ? new T.MeshPhysicalMaterial({...params,clearcoat,clearcoatRoughness:roughness})
+            : new T.MeshStandardMaterial(params);
+        }
+        const chord = (a,b,r,mat,parent=scene,order=0) => {
+          const av=V(...a), bv=V(...b), m=av.clone().lerp(bv,.5);
+          const c=cyl(r,r,av.distanceTo(bv),mat,m.x,m.y,m.z,parent,order,20);
+          c.quaternion.setFromUnitVectors(V(0,1,0),bv.sub(av).normalize());
+          return c;
+        };
+        const refractionTarget=new T.WebGLRenderTarget(1,1);
+        const glassCapture={value:false};
+        const glassRefractionEnabled={value:false};
+        const glassSource={value:null};
+        const roomColor=p=>mix(p.bg,new T.Color(0x7797bf),p.light?.60:.28);
+        const glassBackdrop={value:roomColor(pal)};
+        // The backdrop must fill both the main view and the glass refraction capture.
+        scene.background=glassBackdrop.value;
+        themed.push(p=>glassBackdrop.value.copy(roomColor(p)));
+        function glass(fn, strength, options={}) {
+          const [panelWidth,panelHeight]=options.reflectionSpread??[1,1];
+          const mat = new T.ShaderMaterial({
+            uniforms:{
+              tint:{value:fn(pal)}, strength:{value:strength},
+              centerOpacity:{value:options.opacity??.024},
+              capture:glassCapture, refractView:glassRefractionEnabled,
+              sceneColor:glassSource, backgroundColor:glassBackdrop,
+              wallThickness:{value:options.thickness??0},
+              rimBand:{value:new T.Vector3(...(options.rimBand??[0,0,0]))},
+              panelDirection:{value:panels.map(panel=>panel.direction)},
+              panelAcross:{value:panels.map(panel=>panel.across)}, panelUp:{value:panels.map(panel=>panel.up)},
+              panelSize:{value:panels.map(panel=>new T.Vector2(panel.width*panelWidth,panel.height*panelHeight))},
+              panelColor:{value:panels.map(panel=>new T.Color(...panel.rgb))}
+            },
+            transparent:true, depthWrite:false, side:options.side??T.DoubleSide, forceSinglePass:true,
+            vertexShader:'varying vec3 n; varying vec3 v; varying vec4 projected; varying float localHeight; void main(){vec4 p=modelViewMatrix*vec4(position,1.);n=normalize(normalMatrix*normal);v=isOrthographic?vec3(0.,0.,1.):-p.xyz;localHeight=position.y;projected=projectionMatrix*p;gl_Position=projected;}',
+            fragmentShader:[
+              'uniform vec3 tint; uniform float strength; uniform float centerOpacity;',
+              'uniform bool capture,refractView; uniform sampler2D sceneColor; uniform vec3 backgroundColor; uniform float wallThickness;',
+              'uniform vec3 rimBand;',
+              'uniform vec3 panelDirection[3],panelAcross[3],panelUp[3],panelColor[3]; uniform vec2 panelSize[3];',
+              'varying vec3 n; varying vec3 v; varying vec4 projected; varying float localHeight;',
+              'void main(){if(capture&&wallThickness>0.) discard;vec3 N=normalize(n);vec3 V=normalize(v);if(!gl_FrontFacing) N=-N;float grazing=1.-clamp(dot(N,V),0.,1.);',
+              'vec3 ray=normalize((vec4(reflect(-V,N),0.)*viewMatrix).xyz);',
+              'float fresnel=.038+.962*pow(grazing,5.);',
+              // The folded lip is thicker than the side wall and needs a clearer outline.
+              'float rim=smoothstep(rimBand.x,rimBand.x+.015,localHeight)*(1.-smoothstep(rimBand.y-.018,rimBand.y,localHeight));',
+              'float body=centerOpacity+strength*.43*pow(grazing,2.65)+rimBand.z*rim;',
+              'float reflected=0.;vec3 light=vec3(0.);',
+              'for(int i=0;i<3;i++){',
+              '  vec2 offset=abs(vec2(dot(ray,panelAcross[i]),dot(ray,panelUp[i])));',
+              '  vec2 box=1.-smoothstep(panelSize[i]*.68,panelSize[i],offset);',
+              '  float hit=smoothstep(.59,.77,dot(ray,panelDirection[i]))*box.x*box.y;',
+              '  float amount=hit*(.10+.53*strength+.44*fresnel)*(i==2?.52:1.);',
+              '  reflected+=amount;light+=amount*panelColor[i];',
+              '}',
+              // Glass reflects the darker side of the studio at shallow angles.
+              'if(wallThickness>0.){',
+              '  float edge=fresnel*(1.-min(reflected,1.))*(.26+.25*(1.-smoothstep(-.6,.15,ray.y)));',
+              '  light+=edge*mix(vec3(.055,.071,.085),backgroundColor,.24);reflected+=edge;',
+              '}',
+              'float base=body*(1.-min(reflected,.7));',
+              'if(refractView&&wallThickness>0.&&gl_FrontFacing){',
+              '  vec2 uv=projected.xy/projected.w*.5+.5;',
+              '  vec3 refraction=refract(-V,N,1./1.48);',
+              '  vec2 distortion=refraction.xy*wallThickness*(.53+.47*grazing);',
+              '  vec4 behind=texture2D(sceneColor,clamp(uv+distortion,vec2(.001),vec2(.999)));',
+              '  vec3 transmitted=behind.rgb+backgroundColor*(1.-behind.a);',
+              '  float transmission=.32*(1.-fresnel)*(1.-min(reflected,.8))*behind.a;',
+              '  light+=transmission*transmitted;reflected+=transmission;',
+              '}',
+              'float weight=base+reflected;',
+              'gl_FragColor=vec4((tint*base+light)/max(weight,.001),min(weight,.9));',
+              '#include <colorspace_fragment>',
+              '}'
+            ].join('\n')
+          });
+          themed.push(p=>mat.uniforms.tint.value.copy(fn(p)));
+          return mat;
+        }
+        const glassTint=()=>new T.Color(0x839aab);
+        const thinGlassTint=()=>new T.Color(0x647d8e);
+        const clearGlass=options=>glass(thinGlassTint,.76,options);
+        const glassEdge=clearGlass({opacity:.08,thickness:.012});
+        const steel=blenderSurface('standRod');
+        const steelDark=standard(()=>new T.Color(0x56606a),{metalness:.7,roughness:.42});
+        const steelLight=standard(()=>new T.Color(0xc3c6c8),{metalness:.91,roughness:.22});
+        const grainsize=64, castingGrain=new Uint8Array(grainsize*grainsize*4);
+        let castingSeed=371;
+        for(let i=0;i<castingGrain.length;i+=4){
+          castingSeed=(Math.imul(castingSeed,1664525)+1013904223)>>>0;
+          castingGrain[i]=castingGrain[i+1]=castingGrain[i+2]=78+(castingSeed>>>25);
+          castingGrain[i+3]=255;
+        }
+        const castTexture=new T.DataTexture(castingGrain,grainsize,grainsize);
+        castTexture.magFilter=T.LinearFilter;
+        castTexture.minFilter=T.LinearMipmapLinearFilter;
+        castTexture.generateMipmaps=true;
+        castTexture.needsUpdate=true;
+        const castIron=blenderSurface('standBase',{bumpMap:castTexture,bumpScale:.014});
+        const rubber=blenderSurface('stopper');
+        const backgroundGridMaterial=new T.ShaderMaterial({
+          uniforms:{tint:{value:new T.Color(0x556d90)},backdrop:glassBackdrop,focus:{value:new T.Vector2()}},
+          depthTest:false,depthWrite:false,side:T.DoubleSide,
+          vertexShader:[
+            'varying vec2 ground;',
+            'void main(){ground=position.xy;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}'
+          ].join('\n'),
+          fragmentShader:[
+            'uniform vec3 tint,backdrop; uniform vec2 focus; varying vec2 ground;',
+            'float gridLine(vec2 cells){',
+            '  vec2 pixel=max(fwidth(cells),vec2(.0001));',
+            '  vec2 stripe=abs(fract(cells+.5)-.5)/pixel;',
+            '  float line=1.-smoothstep(.12,1.,min(stripe.x,stripe.y));',
+            '  return line*(1.-smoothstep(.38,.85,max(pixel.x,pixel.y)));',
+            '}',
+            'void main(){',
+            '  float fade=1.-smoothstep(16.,44.,length(ground-focus));',
+            '  float alpha=fade*max(.15*gridLine(2.*ground),.24*gridLine(ground*.4));',
+            '  gl_FragColor=vec4(mix(backdrop,tint,alpha),1.);',
+            '#include <colorspace_fragment>',
+            '}'
+          ].join('\n')
+        });
+        const backgroundGrid=mesh(new T.PlaneGeometry(150,150),backgroundGridMaterial,0,-.32,0,scene,-2);
+        backgroundGrid.rotation.x=-Math.PI/2;
+        // The visible slab is independent of the drag plane used by the instruments.
+        const benchHalf=new T.Vector2(5.67,3.18);
+        const benchRound=.24, benchBevel=.045, benchThickness=.18;
+        const benchTop=new T.ShaderMaterial({
+          uniforms:{
+            nearColor:{value:new T.Color(0xe1ebfa)}, farColor:{value:new T.Color(0xb7cdec)},
+            softbox:{value:new T.Color(0xf5faff)}
+          },
+          vertexShader:[
+            'varying vec2 surfacePoint; varying vec3 worldNormal;',
+            'void main(){',
+            '  surfacePoint=position.xy;',
+            '  worldNormal=mat3(modelMatrix)*normal;',
+            '  gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);',
+            '}'
+          ].join('\n'),
+          fragmentShader:[
+            'uniform vec3 nearColor,farColor,softbox;',
+            'varying vec2 surfacePoint; varying vec3 worldNormal;',
+            'float glow(vec2 q){return exp(-dot(q,q));}',
+            'void main(){',
+            '  vec2 point=surfacePoint;',
+            '  float light=smoothstep(-3.25,3.25,-point.y);',
+            '  vec3 color=mix(farColor,nearColor,.24+.54*light);',
+            // Softbox reflections drift on the laminate as the camera orbits.
+            '  vec3 eye=vec3(viewMatrix[0][2],viewMatrix[1][2],viewMatrix[2][2]);',
+            '  vec2 shift=vec2(eye.x,-eye.z)*.85;',
+            '  vec2 samplePoint=point-shift;',
+            '  float left=glow((samplePoint-vec2(-4.82,-.02))/vec2(.86,2.25));',
+            '  float right=glow((samplePoint-vec2(4.82,.50))/vec2(.84,1.96));',
+            '  float fill=glow((samplePoint-vec2(-.35,1.8))/vec2(3.20,1.05));',
+            '  float gloss=clamp(.57*left+.63*right+.30*fill,0.,.8);',
+            '  color=mix(color,softbox,gloss);',
+            '  color*=mix(.74,1.,smoothstep(-1.,1.,worldNormal.y));',
+            '  gl_FragColor=vec4(color,1.);',
+            '#include <colorspace_fragment>',
+            '}'
+          ].join('\n')
+        });
+        const benchEdge=standard(()=>new T.Color(0xa5b9d5),{roughness:.40,metalness:.06});
+        const bx=benchHalf.x, bz=benchHalf.y, r=benchRound;
+        const benchShape=new T.Shape();
+        benchShape.moveTo(-bx+r,-bz);
+        benchShape.lineTo(bx-r,-bz);
+        benchShape.quadraticCurveTo(bx,-bz,bx,-bz+r);
+        benchShape.lineTo(bx,bz-r);
+        benchShape.quadraticCurveTo(bx,bz,bx-r,bz);
+        benchShape.lineTo(-bx+r,bz);
+        benchShape.quadraticCurveTo(-bx,bz,-bx,bz-r);
+        benchShape.lineTo(-bx,-bz+r);
+        benchShape.quadraticCurveTo(-bx,-bz,-bx+r,-bz);
+        const benchGeometry=new T.ExtrudeGeometry(benchShape,{
+          depth:benchThickness,bevelSize:benchBevel,bevelThickness:benchBevel,bevelSegments:3,curveSegments:8
+        });
+        const bench=mesh(benchGeometry,[benchTop,benchEdge],0,-benchThickness-benchBevel-.014,0,scene,-1);
+        bench.rotation.x=-Math.PI/2;
+        function shade(x,z,rx,rz,strength){
+          const geo=new T.PlaneGeometry(rx*2,rz*2);
+          const mat=new T.ShaderMaterial({transparent:true,depthWrite:false,
+            uniforms:{tint:{value:pal.fg.clone()},strength:{value:strength*(pal.light?1:.72)},contact:{value:1},
+              benchHalf:{value:benchHalf},benchRound:{value:benchRound}},
+            vertexShader:[
+              'varying vec2 q,tablePoint;',
+              'void main(){q=uv*2.-1.;tablePoint=(modelMatrix*vec4(position,1.)).xz;',
+              'gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}'
+            ].join('\n'),
+            fragmentShader:[
+              'varying vec2 q,tablePoint; uniform vec3 tint; uniform vec2 benchHalf;',
+              'uniform float strength,contact,benchRound;',
+              'void main(){',
+              '  vec2 edge=abs(tablePoint)-benchHalf+benchRound;',
+              '  float distanceToEdge=length(max(edge,0.))+min(max(edge.x,edge.y),0.)-benchRound;',
+              '  float onTable=1.-smoothstep(-.03,0.,distanceToEdge);',
+              '  float body=max(0.,1.-pow(abs(q.x),4.)-pow(abs(q.y),4.));',
+              '  float penumbra=pow(max(0.,1.-dot(q,q)),2.);',
+              '  gl_FragColor=vec4(tint,onTable*strength*contact*(.68*body*body+.32*penumbra));',
+              '#include <colorspace_fragment>',
+              '}'
+            ].join('\n')});
+          themed.push(p=>{mat.uniforms.tint.value.copy(p.fg);mat.uniforms.strength.value=strength*(p.light?1:.72);});
+          const shadow=mesh(geo,mat,x,.002,z,scene,1);
+          shadow.rotation.x=-Math.PI/2;
+          shadow.userData.contactShadow=true;
+          return shadow;
+        }
+
+        const glassTube=clearGlass({thickness:.025});
+        const glassRim=glass(glassTint,.92,{opacity:.15});
+        const apparatus=new Map();
+        let workingStart=scene.children.length;
+        function finishInstrument(id) {
+          const instrument=new T.Group();
+          instrument.name=id;
+          instrument.add(...scene.children.slice(workingStart));
+          scene.add(instrument);
+          apparatus.set(id,instrument);
+          workingStart=scene.children.length;
+          return instrument;
+        }
+        const standX=-4.10, standZ=-1.03;
+        shade(standX+.13,standZ-.16,1.19,.95,.32);
+        blenderMesh('standBase',castIron,standX,.1485,standZ);
+        for(const xx of [-.72,.72]) for(const zz of [-.56,.56]) {
+          cyl(.092,.103,.05,rubber,standX+xx,.035,standZ+zz);
+        }
+        blenderMesh('standSocket',steel,standX,.3,standZ);
+        blenderMesh('standRod',steel,standX,1.92,standZ);
+        cyl(.092,.092,.055,steelLight,standX,3.555,standZ);
+        const tubeZ=.32;
+        const closed=V(-4.27,2.6,tubeZ), mouth=V(-.64,2.25,tubeZ);
+        const axis=mouth.clone().sub(closed);
+        const length=axis.length();
+        const tube=new T.Group();
+        tube.position.copy(closed);
+        tube.quaternion.setFromUnitVectors(V(0,1,0),axis.normalize());
+        const tubeShell=blenderMesh('tube',glassTube,0,0,0,tube,7);
+        tubeShell.geometry.computeBoundingBox();
+        const tubeBounds=tubeShell.geometry.boundingBox;
+        // Measure from the glass lip to the rounded bottom, excluding the stopper.
+        const clampDistance=T.MathUtils.lerp(tubeBounds.max.y,tubeBounds.min.y,1/3);
+        const clampOffset=axis.clone().multiplyScalar(clampDistance);
+        const {x:clampX,y:clampY}=closed.clone().add(clampOffset);
+        const clampMount=new T.Group();
+        scene.add(clampMount);
+        blenderMesh('clampBlock',castIron,standX,clampY,standZ,clampMount);
+        chord([standX,clampY,standZ],[clampX,clampY,-.09],.061,steelLight,clampMount);
+        chord([standX-.02,clampY,standZ],[standX-.35,clampY,standZ],.062,steelLight,clampMount);
+        blenderMesh('clampKnob',steel,standX-.355,clampY,standZ,clampMount);
+        const standGroup=finishInstrument('stand');
+
+        scene.add(tube);
+        const tubeRadius=.344;
+        for(const [angle, a, b] of [[.51,.18,length-.24],[.66,.38,length-.46],[-.8,.33,length-.26]]){
+          const x=Math.cos(angle)*.347,z=Math.sin(angle)*.347;
+          line([V(x,a,z),V(x,b,z)],p=>mix(p.bg,p.water,p.light?.39:.56),angle===.66?.44:.72,tube,8);
+        }
+        const clampCollar=new T.Group();
+        clampCollar.name='Split test tube clamp';
+        clampCollar.position.y=clampDistance;
+        tube.add(clampCollar);
+        const jaws=[];
+        for(const sign of [-1,1]){
+          const jaw=new T.Group();
+          jaw.name=sign<0?'Fixed back jaw':'Moving front jaw';
+          clampCollar.add(jaw);
+          const start=sign<0?Math.PI+.17:.17, arc=Math.PI-.34;
+          const band=(radius,thickness,mat,y)=>{
+            const geo=new T.TorusGeometry(radius,thickness,10,28,arc);
+            geo.rotateZ(start);
+            geo.rotateX(Math.PI/2);
+            return mesh(geo,mat,0,y,0,jaw);
+          };
+          band(.386,.044,steelDark,0);
+          band(.389,.017,steelLight,.037);
+          band(.350,.017,rubber,0);
+          for(const a of [start,start+arc]){
+            const x=.385*Math.cos(a), z=.385*Math.sin(a);
+            const tip=mesh(new T.SphereGeometry(.043,12,7),steelDark,x,0,z,jaw);
+            tip.scale.set(1,1.20,1);
+          }
+          jaws.push(jaw);
+        }
+        const jawScrew=standard(p=>mix(p.muted,p.heat,.17),{metalness:.38,roughness:.43});
+        chord([.30,.0,-.17],[.46,.0,.17],.024,steelLight,clampCollar);
+        const thumbScrew=cyl(.065,.065,.043,jawScrew,.46,0,.182,clampCollar);
+        thumbScrew.rotation.x=Math.PI/2;
+        const stopY=length+.095;
+        const stopper=blenderMesh('stopper',rubber,0,stopY,0,tube);
+        const stopperLip=cyl(.286,.286,.042,steelDark,0,stopY+.128,0,tube);
+        const holeEdge=torus(.083,.018,rubber,0,stopY+.155,0,tube);
+        holeEdge.rotation.x=Math.PI/2;
+        const cotton=standard(p=>mix(p.bg,p.fg,p.light?.08:.26));
+        const woolGeo=new T.IcosahedronGeometry(1,2);
+        const cottonTufts=[];
+        let seed=137;
+        const random=()=>{seed=(1664525*seed+1013904223)>>>0;return seed/4294967296;};
+        for(let i=0;i<19;i++){
+          const ang=random()*Math.PI*2, r=.20*Math.sqrt(random());
+          const tuft=mesh(woolGeo,cotton,r*Math.cos(ang),length-.45+random()*.18,r*Math.sin(ang),tube);
+          cottonTufts.push(tuft);
+          tuft.scale.set(.054+random()*.063,.045+random()*.058,.061+random()*.046);
+        }
+        const cottonHome=cottonTufts.map(t=>t.position.clone());
+        const crystalGeo=new T.DodecahedronGeometry(1,0);
+        const crystals=[];
+        const grains=Array.from({length:5},(_,i)=>standard(p=>mix(p.purple,p.fg,.29+i*.09),{roughness:.66,flatShading:true}));
+        for(let i=0;i<53;i++){
+          const along=-.09+.83*Math.pow(random(),1.32);
+          const z=(random()-.5)*.41;
+          const x=Math.sqrt(Math.max(.019,.258*.258-z*z))-.015-random()*.11;
+          const crystal=mesh(crystalGeo,grains[i%grains.length],x,along,z,tube);
+          crystals.push(crystal);
+          const r=.031+random()*.037;
+          crystal.scale.set(r*.88,r*(1+random()*.7),r);
+          crystal.rotation.set(random()*7,random()*7,random()*7);
+        }
+
+        const chute=new T.Group();
+        tube.add(chute);
+        const paper=standard(p=>mix(p.bg,p.yellow,p.light?.18:.48),{roughness:.92,side:T.DoubleSide});
+        const paperEdge=standard(p=>mix(p.muted,p.heat,.20),{roughness:.84});
+        const paperLength=length+.52;
+        const floorX=.168, lipX=.059, half=.174;
+        const section = [[lipX,-half],[floorX,0],[lipX,half]];
+        for(let i=0;i<2;i++){
+          const [x,z]=section[i], [xx,zz]=section[i+1];
+          const g=new T.BufferGeometry();
+          g.setAttribute('position',new T.Float32BufferAttribute([x,0,z,xx,0,zz,xx,paperLength,zz,x,paperLength,z],3));
+          g.setIndex([0,1,2,0,2,3]);
+          g.computeVertexNormals();
+          mesh(g,paper,0,0,0,chute,4);
+          chord([x,0,z],[x,paperLength,z],.010,paperEdge,chute);
+        }
+        chord([lipX,0,half],[lipX,paperLength,half],.010,paperEdge,chute);
+        const payload=crystals.map((source,i)=>{
+          const grain=mesh(crystalGeo,source.material,0,0,0,tube);
+          grain.scale.copy(source.scale).multiplyScalar(.89);
+          grain.rotation.copy(source.rotation);
+          return {grain,destination:source.position.clone(),y:.07+((i*13)%61)/126,z:(((i*17)%43)-21)/264};
+        });
+        chute.visible=false;
+        payload.forEach(p=>{p.grain.visible=false;});
+        tube.updateMatrixWorld(true);
+        clampMount.attach(clampCollar);
+        finishInstrument('tube');
+        const lampX=-3.88, lampZ=.31;
+        const burnerSeat=.867, wickTip=1.105;
+        const lampShadow=shade(lampX+.07,lampZ-.05,.72,.66,.26);
+        const burner=clearGlass({thickness:.048,reflectionSpread:[1.10,1.20]});
+        const lampEdge=clearGlass({opacity:.085});
+        const lampGleam=clearGlass({opacity:.045});
+        const body=blenderMesh('lamp',burner,lampX,0,lampZ,scene,6);
+        body.name='Glass reservoir';
+        const fuel=glass(()=>new T.Color(0xc4d2c3),.30,{opacity:.052,side:T.FrontSide});
+        const lampLiquid=lathe([[0,.105],[.317,.105],[.367,.117],[.399,.175],[.429,.285],[.474,.451],
+          [.479,.468],[0,.468]],fuel,lampX,0,lampZ,scene,4);
+        lampLiquid.name='Alcohol and meniscus';
+        for(const [radius,thickness,y,mat] of [[.357,.018,.067,lampEdge],[.402,.010,.108,lampGleam],
+          [.479,.007,.469,lampEdge],[.170,.011,.959,lampGleam],[.207,.009,.804,lampEdge]]) {
+          torus(radius,thickness,mat,lampX,y,lampZ,scene,8).rotation.x=Math.PI/2;
+        }
+        const porcelain=blenderSurface('wickSeat');
+        const wickSeat=blenderMesh('wickSeat',porcelain,lampX,0,lampZ);
+        wickSeat.name='Porcelain wick holder';
+        const wickPath=new T.CatmullRomCurve3([
+          V(.187,.136,.094),V(-.024,.237,.057),V(-.120,.375,.024),V(-.084,.541,-.016),
+          V(-.021,.756,-.012),V(0,.993,0),V(-.012,wickTip,0)
+        ]);
+        const wickYarn=standard(p=>mix(p.bg,p.muted,p.light?.37:.66),{roughness:1});
+        const wickTwist=standard(p=>mix(p.bg,p.muted,p.light?.18:.52),{roughness:1});
+        const wickFiber=mesh(new T.TubeGeometry(wickPath,60,.030,11,false),wickYarn,lampX,0,lampZ);
+        wickFiber.name='Curved cotton wick';
+        const twistFrames=wickPath.computeFrenetFrames(64,false);
+        for(let strand=0;strand<3;strand++){
+          const fiber=new T.CatmullRomCurve3(twistFrames.normals.map((normal,i)=>{
+            const u=i/64,angle=u*Math.PI*31+strand*Math.PI*2/3;
+            return wickPath.getPointAt(u).addScaledVector(normal,.026*Math.cos(angle))
+              .addScaledVector(twistFrames.binormals[i],.026*Math.sin(angle));
+          }));
+          mesh(new T.TubeGeometry(fiber,90,.007,6,false),wickTwist,lampX,0,lampZ);
+        }
+        chord([lampX-.009,1.068,lampZ],[lampX-.012,wickTip,lampZ],.027,rubber);
+        // Sample a small volume so the core, edge and tip blend smoothly from any view.
+        const flameVolume=new T.BoxGeometry(.62,1.20,.58).translate(0,.56,0);
+        function makeFlame(parent, origin, blueBase, seed) {
+          const material=new T.ShaderMaterial({
+            transparent:true,depthWrite:false,toneMapped:false,
+            uniforms:{clock:{value:0},glow:{value:1},blueBase:{value:blueBase},seed:{value:seed}},
+            vertexShader:`
+              varying vec3 entry, ray;
+              void main(){
+                entry=position;
+                // The experiment uses an orthographic camera. Undo the object's scale as well as its rotation.
+                vec3 viewRay=-vec3(viewMatrix[0][2],viewMatrix[1][2],viewMatrix[2][2]);
+                vec3 x=modelMatrix[0].xyz, y=modelMatrix[1].xyz, z=modelMatrix[2].xyz;
+                ray=vec3(dot(viewRay,x)/dot(x,x),dot(viewRay,y)/dot(y,y),dot(viewRay,z)/dot(z,z));
+                gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);
+              }
+            `,
+            fragmentShader:`
+              varying vec3 entry, ray;
+              uniform float clock, glow, blueBase, seed;
+              void main(){
+                vec3 direction=normalize(ray);
+                vec3 ahead=mix(vec3(-.31,-.04,-.29),vec3(.31,1.16,.29),step(0.,direction));
+                vec3 distances=(ahead-entry)/mix(min(direction,vec3(-.00001)),max(direction,vec3(.00001)),step(0.,direction));
+                float segment=max(0.,min(distances.x,min(distances.y,distances.z)))/18.;
+                float t=clock+seed;
+                float height=.96+.050*sin(t*4.1)+.035*sin(t*7.7)+.018*sin(t*13.2);
+                float taper=5.+.65*sin(t*4.8);
+                vec3 light=vec3(0.);
+                float opacity=0.;
+                for(int i=0;i<18;i++){
+                  vec3 p=entry+direction*(float(i)+.5)*segment;
+                  float y=clamp(p.y/height,0.,1.);
+                  float wave=sin(t*5.7-y*5.4)+.38*sin(t*10.3-y*7.8);
+                  vec2 center=vec2(.048*y*y+.049*y*wave,.055*y*sin(t*4.5-y*4.7+.9));
+                  vec2 crossSection=(p.xz-center)*vec2(1.,1.17);
+                  float radius=(.038+.218*(1.-exp(-taper*y)))*pow(1.-y,.88);
+                  radius*=1.+.095*y*sin(t*8.6-y*21.+crossSection.x*18.);
+                  float edge=length(crossSection);
+                  float envelope=(1.-smoothstep(radius*.56,radius+.022,edge))*smoothstep(-.025,.038,p.y);
+                  envelope*=1.-smoothstep(.80,1.,y);
+                  float core=(1.-smoothstep(radius*.18,radius*.80,edge))*smoothstep(.12,.38,y)*(1.-smoothstep(.65,1.,y));
+                  vec3 warm=mix(vec3(.94,.20,.015),vec3(1.,.79,.30),core);
+                  float cool=blueBase*(1.-smoothstep(.12,.34,y));
+                  vec3 color=mix(warm,vec3(.075,.32,1.),cool);
+                  float sampleAlpha=1.-exp(-segment*envelope*(10.+4.5*core)*glow);
+                  light+=(1.-opacity)*sampleAlpha*color;
+                  opacity+=(1.-opacity)*sampleAlpha;
+                }
+                if(opacity<.004) discard;
+                gl_FragColor=vec4(light/opacity,opacity);
+                #include <colorspace_fragment>
+              }
+            `
+          });
+          const volume=mesh(flameVolume,material,...origin,parent,9);
+          volume.visible=false;
+          return volume;
+        }
+        const flame=new T.Group();
+        flame.position.set(lampX-.012,wickTip-.035,lampZ);
+        scene.add(flame);
+        const lampFlame=makeFlame(flame,[0,0,0],.94,0);
+        flame.visible=false;
+        const lampGroup=finishInstrument('lamp');
+        const lampBodyGroup=new T.Group();
+        lampBodyGroup.add(...lampGroup.children.filter(ob=>ob!==lampShadow));
+        lampGroup.add(lampBodyGroup);
+
+        // Rounded bends preserve a connected passage into the mouth of the inverted jar.
+        const bent = points => {
+          const path=new T.CurvePath();
+          let prev=points[0];
+          for(let i=1;i<points.length-1;i++){
+            const p=points[i], q=points[i+1];
+            const radius=Math.min(.22,prev.distanceTo(p)*.4,q.distanceTo(p)*.4);
+            const start=p.clone().add(prev.clone().sub(p).normalize().multiplyScalar(radius));
+            const end=p.clone().add(q.clone().sub(p).normalize().multiplyScalar(radius));
+            path.add(new T.LineCurve3(prev,start));
+            path.add(new T.QuadraticBezierCurve3(start,p,end));
+            prev=end;
+          }
+          path.add(new T.LineCurve3(prev,points.at(-1)));
+          return path;
+        };
+        const routePoints = [
+          mouth.clone().addScaledVector(axis,-.02),V(.06,2.18,.32),
+          V(2.17,.31,.32),V(2.68,.31,.32),V(2.68,.72,.32)
+        ];
+        const pipeRoute=bent(routePoints);
+        const pipeGlass=glass(thinGlassTint,.89,{opacity:.055});
+        const sleeveStart=.342, sleeveEnd=.457;
+        class PipeSection extends T.Curve {
+          constructor(from,to){super();this.from=from;this.to=to;}
+          getPoint(t,target){const point=pipeRoute.getPoint(this.from+(this.to-this.from)*t);return target?target.copy(point):point;}
+        }
+        function pipePiece(from,to,radius,material,order) {
+          return mesh(new T.TubeGeometry(new PipeSection(from,to),64,radius,16,false),material,0,0,0,scene,order);
+        }
+        const inletPipe=pipePiece(0,sleeveStart,.086,pipeGlass,7);
+        const collectorTube=pipePiece(sleeveEnd,1,.086,pipeGlass,7);
+        const sleeveMat=standard(p=>mix(p.heat,p.bg,p.light?.33:.17),{roughness:.76});
+        const rubberJoint=pipePiece(sleeveStart,sleeveEnd,.116,sleeveMat,0);
+        const sleeveEdge=standard(p=>mix(p.heat,p.fg,.24),{roughness:.63});
+        const sleeveCollars=[sleeveStart,sleeveEnd].map(t=>{
+          const point=pipeRoute.getPoint(t);
+          const collar=torus(.101,.014,sleeveEdge,point.x,point.y,point.z);
+          collar.quaternion.setFromUnitVectors(V(0,0,1),pipeRoute.getTangent(t));
+          return collar;
+        });
+        const outlet=torus(.077,.014,glassRim,2.68,.72,.32,scene,8);
+        outlet.rotation.x=Math.PI/2;
+        const alternatePipe=(points)=>{
+          const curve=bent([pipeRoute.getPoint(sleeveEnd),...points]);
+          const segment=mesh(new T.TubeGeometry(curve,60,.086,16,false),pipeGlass,0,0,0,scene,7);
+          const end=points.at(-1);
+          const ring=torus(.077,.014,glassRim,end.x,end.y,end.z,scene,8);
+          ring.quaternion.setFromUnitVectors(V(0,0,1),curve.getTangent(1));
+          segment.visible=ring.visible=false;
+          return {segment,ring,curve,end};
+        };
+        const bathPipe=alternatePipe([V(1.91,.50,.32),V(1.79,.55,.88)]);
+        const dryPipe=alternatePipe([V(1.99,1.12,-.02),V(2.91,1.05,-.34)]);
+        collectorTube.visible=outlet.visible=false;
+        bathPipe.segment.visible=bathPipe.ring.visible=true;
+        const pipeGroup=finishInstrument('pipe');
+        for(const piece of [stopper,stopperLip,holeEdge]) pipeGroup.attach(piece);
+        const proximalPipe=new T.Group();
+        proximalPipe.add(inletPipe,sleeveCollars[0],stopper,stopperLip,holeEdge);
+        const distalPipe=new T.Group();
+        distalPipe.add(collectorTube,outlet,bathPipe.segment,bathPipe.ring,dryPipe.segment,dryPipe.ring);
+        pipeGroup.add(proximalPipe,distalPipe);
+        const sleeveInlet=pipeRoute.getPoint(sleeveStart), sleeveOutlet=pipeRoute.getPoint(sleeveEnd);
+        const inletTangent=pipeRoute.getTangent(sleeveStart), outletTangent=pipeRoute.getTangent(sleeveEnd);
+        const sleeveMidpoint=pipeRoute.getPoint((sleeveStart+sleeveEnd)/2);
+        const jointStart=V(Infinity,Infinity,Infinity), jointEnd=jointStart.clone(), jointEntry=jointStart.clone();
+        function updateTankConnection(){
+          const start=sleeveInlet.clone().applyQuaternion(proximalPipe.quaternion).add(proximalPipe.position);
+          const entry=inletTangent.clone().applyQuaternion(proximalPipe.quaternion);
+          const end=sleeveOutlet.clone();
+          if(jointStart.equals(start)&&jointEnd.equals(end)&&jointEntry.equals(entry)) return;
+          jointStart.copy(start);jointEnd.copy(end);jointEntry.copy(entry);
+          const handle=Math.min(.27,start.distanceTo(end)*.32);
+          // The glass segments are rigid; only the rubber between them changes shape.
+          const joint=new T.CubicBezierCurve3(start,start.clone().addScaledVector(entry,handle),
+            end.clone().addScaledVector(outletTangent,-handle),end);
+          rubberJoint.geometry.dispose();
+          rubberJoint.geometry=new T.TubeGeometry(joint,40,.116,16,false);
+          sleeveCollars[1].position.copy(end);
+          joint.getPoint(.5,sleeveMidpoint);
+        }
+
+        const tankX = 2.27, tankZ = .28, jarX = 2.68, jarZ = .32;
+        shade(tankX+.12,tankZ-.09,2.25,1.53,.20);
+        const poolLevel = .78;
+        function tankOutline(width, length, radius, shape = new T.Shape()) {
+          const hw = width / 2, hl = length / 2;
+          shape.moveTo(-hw + radius, -hl);
+          shape.lineTo(hw - radius, -hl);
+          shape.quadraticCurveTo(hw, -hl, hw, -hl + radius);
+          shape.lineTo(hw, hl - radius);
+          shape.quadraticCurveTo(hw, hl, hw - radius, hl);
+          shape.lineTo(-hw + radius, hl);
+          shape.quadraticCurveTo(-hw, hl, -hw, hl - radius);
+          shape.lineTo(-hw, -hl + radius);
+          shape.quadraticCurveTo(-hw, -hl, -hw + radius, -hl);
+          shape.closePath();
+          return shape;
+        }
+        function basinBand(y, height, width, length, thickness, material, order) {
+          const shape = tankOutline(width, length, .18);
+          if (thickness) shape.holes.push(tankOutline(width - 2 * thickness, length - 2 * thickness, .12, new T.Path()));
+          const geometry = new T.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false, curveSegments: 8 });
+          geometry.rotateX(-Math.PI / 2);
+          const band = mesh(geometry, material, tankX, y, tankZ);
+          band.renderOrder = order;
+          return band;
+        }
+        const basinGlass = clearGlass({
+          opacity:.018,thickness:.027,rimBand:[.883,.963,.15],reflectionSpread:[1.18,1.12]
+        });
+        const jarGlass = clearGlass({
+          thickness:.034,rimBand:[.452,.548,.16],reflectionSpread:[1.05,1.26]
+        });
+        blenderMesh('tank',basinGlass,tankX,0,tankZ,scene,3);
+        const waterTint = ()=>new T.Color(0x80b1be);
+        const tankWater = flat(waterTint,{ transparent: true, opacity: .12, depthWrite: false, side: T.FrontSide });
+        basinBand(.154, .624, 4.1, 2.70, .014, tankWater, 1);
+        const tankSurfaceShape = tankOutline(4.1, 2.7, .12);
+        const submergedJar = new T.Path();
+        const tankCutoutRadius=.498;
+        submergedJar.absarc(jarX - tankX, tankZ - jarZ, tankCutoutRadius, 0, Math.PI * 2, true);
+        tankSurfaceShape.holes.push(submergedJar);
+        const tankSurfaceGeometry = new T.ShapeGeometry(tankSurfaceShape, 32);
+        tankSurfaceGeometry.rotateX(-Math.PI / 2);
+        const tankSurface = mesh(tankSurfaceGeometry, glass(waterTint,.32,{opacity:.13}),tankX,poolLevel,tankZ);
+        tankSurface.renderOrder = 2;
+        const surfacePatch=mesh(new T.CircleGeometry(tankCutoutRadius+.001,48),tankSurface.material,jarX,poolLevel,jarZ,scene,2);
+        surfacePatch.rotation.x=-Math.PI/2;
+        surfacePatch.visible=false;
+        const rest = blenderSurface('rackRail');
+        for(const dz of [-.405,.405]){
+          blenderMesh('rackRail',rest,jarX,.45,jarZ+dz);
+          for(const dx of [-.46,.46]) box(.091,.276,.091,rest,jarX+dx,.298,jarZ+dz);
+        }
+        finishInstrument('tank');
+
+        const jarBody=blenderMesh('jar',jarGlass,jarX,0,jarZ,scene,3);
+        const jarWaterMaterial = flat(waterTint, {
+          opacity: .24, transparent: true, depthWrite: false, side: T.FrontSide
+        });
+        const jarSurfaceMaterial = glass(waterTint,.49,{opacity:.24});
+        const waterSections = 32, waterColumns = 56;
+        const jarWaterSides = new T.LatheGeometry(
+          Array.from({ length: waterSections + 1 }, (_, i) => new T.Vector2(.7, i / waterSections)), waterColumns
+        );
+        const jarWaterMesh = mesh(jarWaterSides, jarWaterMaterial, jarX, 0, jarZ);
+        jarWaterMesh.renderOrder = 1;
+        jarWaterMesh.frustumCulled = false;
+        const jarSurfaceGeo = new T.CircleGeometry(1, 56);
+        jarSurfaceGeo.rotateX(-Math.PI / 2);
+        const jarSurface = mesh(jarSurfaceGeo, jarSurfaceMaterial, jarX, 3.23, jarZ);
+        jarSurface.renderOrder = 2;
+        const waterEdge = glass(waterTint,.65,{opacity:.24});
+        const meniscus = torus(1, .018, waterEdge, jarX, 3.23, jarZ);
+        meniscus.renderOrder = 4;
+        meniscus.rotation.x=Math.PI/2;
+        const jarWaterPositions = jarWaterSides.attributes.position;
+        jarWaterPositions.setUsage(T.DynamicDrawUsage);
+        // Leave a little clearance inside the glass neck and shoulder.
+        const jarInside = [
+          [.49,.451],[.83,.451],[.876,.458],[.925,.477],[.964,.512],
+          [1.017,.577],[1.083,.641],[1.155,.689],[1.232,.713],[1.306,.723],[3.16,.721],[3.23,.707]
+        ];
+        function jarWaterRadius(y) {
+          for (let i = 1; i < jarInside.length; i++) {
+            const [nextY, nextR] = jarInside[i];
+            if (y <= nextY) {
+              const [lastY, lastR] = jarInside[i - 1];
+              return T.MathUtils.lerp(lastR, nextR, (y - lastY) / (nextY - lastY));
+            }
+          }
+          return jarInside.at(-1)[1];
+        }
+        const jarWaterAngles = Array.from({length: waterColumns + 1}, (_, col) => {
+          const theta = col / waterColumns * Math.PI * 2;
+          return [Math.sin(theta), Math.cos(theta)];
+        });
+        function updateJar(low, high, upright) {
+          for (let row = 0; row <= waterSections; row++) {
+            const y = T.MathUtils.lerp(low, high, row / waterSections);
+            const radius = jarWaterRadius(y);
+            for (let col = 0; col <= waterColumns; col++) {
+              const [sx, cz] = jarWaterAngles[col];
+              jarWaterPositions.setXYZ(col * (waterSections + 1) + row, sx * radius, y, cz * radius);
+            }
+          }
+          jarWaterPositions.needsUpdate = true;
+          const height = upright ? low : high;
+          const radius = jarWaterRadius(height);
+          jarSurface.position.y = meniscus.position.y = height;
+          jarSurface.scale.set(radius, 1, radius);
+          meniscus.scale.set(radius, radius, 1);
+        }
+        updateJar(.49, 3.23, false);
+        const jarGroup=finishInstrument('jar');
+        const laterJar=V(4.04,0,-2.03);
+        const jarShadow=shade(laterJar.x+.09,laterJar.z-.08,.89,.81,.23);
+        const jarPivot=V(jarX,1.735,jarZ), jarRestPivot=V(laterJar.x,1.67,laterJar.z);
+        function poseJar(mix=0,lift=0){
+          jarGroup.rotation.z=Math.PI*(1-mix);
+          jarGroup.position.copy(jarRestPivot).lerp(jarPivot,mix)
+            .sub(jarPivot.clone().applyQuaternion(jarGroup.quaternion));
+          jarGroup.position.y+=lift;
+        }
+        poseJar();
+        jarWaterMesh.visible=jarSurface.visible=meniscus.visible=false;
+        const plateCenterY=.45, plateClearance=.042;
+        const lid=blenderMesh('jarPlate',glassEdge,jarX,plateCenterY,jarZ,jarGroup,9);
+        lid.visible=false;
+
+        const towel=new T.Group();
+        const fabric=document.createElement('canvas');
+        fabric.width=fabric.height=192;
+        const fabricCtx=fabric.getContext('2d');
+        fabricCtx.fillStyle='#c0c0c0';
+        fabricCtx.fillRect(0,0,192,192);
+        // Offset rows of small yarn loops give the cloth a fine, non-uniform nap.
+        let fabricSeed=745;
+        for(let row=-1;row<33;row++) for(let col=-1;col<39;col++){
+          fabricSeed=(Math.imul(fabricSeed,1664525)+1013904223)>>>0;
+          const v=fabricSeed/4294967296;
+          const x=col*5+(row%2)*2.5,y=row*6+(v-.5)*1.7;
+          const shade=168+Math.round(v*56);
+          fabricCtx.strokeStyle='rgb('+shade+','+shade+','+shade+')';
+          fabricCtx.lineWidth=1.25;
+          fabricCtx.beginPath();
+          fabricCtx.ellipse(x,y,1.35+v*.53,2.05+v*.57,(v-.5)*.65,0,Math.PI*2);
+          fabricCtx.stroke();
+        }
+        const pile=new T.CanvasTexture(fabric);
+        pile.anisotropy=Math.min(4,renderer.capabilities.getMaxAnisotropy());
+        const clothColor=p=>mix(mix(p.water,p.oxygen,.57),p.bg,p.light?.31:.16);
+        const clothProps={map:pile,bumpMap:pile,bumpScale:.017,roughness:1,sheen:.62,
+          sheenRoughness:.84,sheenColor:new T.Color(0xe3f4ef)};
+        const cloth=color(new T.MeshPhysicalMaterial(clothProps),clothColor);
+        const underside=color(new T.MeshPhysicalMaterial(clothProps),p=>mix(clothColor(p),p.muted,.26));
+        const binding=standard(p=>mix(clothColor(p),p.muted,.23),{roughness:.96});
+        const thread=color(new T.LineBasicMaterial({transparent:true,opacity:.62}),p=>mix(clothColor(p),p.bg,.39));
+        const drape=(x,z)=>.036*Math.cos(4.6*x+2.1*z)+.026*Math.sin(11*x-4.8*z)
+          -.17*Math.pow(Math.abs(z/.43),1.8)+.013*Math.sin(20*z+6*x);
+        function clothLayer(w,h,d,dy,dz,material){
+          const geom=new T.BoxGeometry(w,h,d,28,5,26);
+          const part=geom.getAttribute('position');
+          const r=.031;
+          const point=V(0,0,0), inner=point.clone();
+          for(let i=0;i<part.count;i++){
+            point.fromBufferAttribute(part,i);
+            inner.set(
+              T.MathUtils.clamp(point.x,-w/2+r,w/2-r),
+              T.MathUtils.clamp(point.y,-h/2+r,h/2-r),
+              T.MathUtils.clamp(point.z,-d/2+r,d/2-r)
+            );
+            point.sub(inner).setLength(r).add(inner);
+            const z=point.z+dz;
+            part.setXYZ(i,point.x+.022*Math.sin(8*z),point.y+dy+drape(point.x,z),z);
+          }
+          geom.computeVertexNormals();
+          return mesh(geom,material,0,0,0,towel);
+        }
+        clothLayer(.99,.08,.82,-.055,-.015,underside);
+        clothLayer(1.10,.092,.84,.007,.022,cloth);
+
+        const rimShape=new T.Shape();
+        const hemX=.512,hemZ=.385,hemR=.070;
+        rimShape.moveTo(-hemX+hemR,-hemZ);
+        rimShape.lineTo(hemX-hemR,-hemZ);
+        rimShape.quadraticCurveTo(hemX,-hemZ,hemX,-hemZ+hemR);
+        rimShape.lineTo(hemX,hemZ-hemR);
+        rimShape.quadraticCurveTo(hemX,hemZ,hemX-hemR,hemZ);
+        rimShape.lineTo(-hemX+hemR,hemZ);
+        rimShape.quadraticCurveTo(-hemX,hemZ,-hemX,hemZ-hemR);
+        rimShape.lineTo(-hemX,-hemZ+hemR);
+        rimShape.quadraticCurveTo(-hemX,-hemZ,-hemX+hemR,-hemZ);
+        const onCloth=(x,z,dy)=>V(x+.022*Math.sin(8*z),.057+drape(x,z)+dy,z);
+        const hemPath=new T.CatmullRomCurve3(
+          rimShape.getSpacedPoints(88).slice(0,-1).map(({x,y})=>onCloth(x,y+.022,0)),true
+        );
+        mesh(new T.TubeGeometry(hemPath,104,.009,6,true),binding,0,0,0,towel);
+        const stitches=[];
+        for(let i=0;i<86;i++){
+          for(const end of [0,.44]){
+            const p=rimShape.getPointAt((i+end)/86);
+            stitches.push(onCloth(p.x*.946,p.y*.932+.022,.005));
+          }
+        }
+        towel.add(new T.LineSegments(new T.BufferGeometry().setFromPoints(stitches),thread));
+        towel.rotation.z=-.14;
+        towel.visible=false;
+        scene.add(towel);
+        const wood=standard(()=>new T.Color(0xca9b67),{roughness:.86});
+        const splint=new T.Group(), splintFire=new T.Group();
+        box(.046,1.00,.048,wood,0,.53,0,splint);
+        const burntWood=standard(()=>new T.Color(0x35241b),{roughness:1});
+        box(.053,.102,.055,burntWood,0,.012,0,splint);
+        const emberMaterial=new T.MeshBasicMaterial({color:0xff7925,toneMapped:false,transparent:true,depthWrite:false});
+        const embers=new T.Group(), coalGeometry=new T.SphereGeometry(1,8,6);
+        for(const [x,y,z,rx,ry,rz] of [
+          [0,-.036,0,.029,.015,.028],[.025,-.013,.012,.008,.026,.011],
+          [-.019,-.005,.023,.011,.018,.009],[.009,-.012,-.026,.015,.020,.008]
+        ]) mesh(coalGeometry,emberMaterial,x,y,z,embers,8).scale.set(rx,ry,rz);
+        splint.add(embers,splintFire);
+        splint.visible=false;
+        scene.add(splint);
+        const splintFlame=makeFlame(splintFire,[0,-.044,0],.12,3.7);
+        const matchBoxCenter=V(lampX-1.03,.14,lampZ+.72), matchBox=new T.Group();
+        matchBox.position.copy(matchBoxCenter);
+        const cardboard=blenderSurface('matchBox');
+        const matchLabel=standard(p=>mix(p.heat,p.fg,.36),{roughness:.88});
+        const strikeStrip=standard(()=>new T.Color(0x703f34),{roughness:1});
+        const grit=standard(()=>new T.Color(0xbd8666),{roughness:1});
+        blenderMesh('matchBox',cardboard,0,0,0,matchBox);
+        box(.73,.005,.40,matchLabel,0,.117,0,matchBox);
+        box(.80,.125,.009,strikeStrip,0,-.009,.264,matchBox);
+        for(let i=0;i<18;i++){
+          box(.012+(i%3)*.005,.013,.004,grit,-.375+i*.044,-.045+(i%4)*.024,.270,matchBox);
+        }
+        const match=new T.Group(), matchShaft=new T.Group(), matchFire=new T.Group();
+        match.add(matchShaft,matchFire);
+        const matchwood=standard(p=>mix(p.bg,p.yellow,.57),{roughness:.9});
+        const unstruck=standard(()=>new T.Color(0x963627),{roughness:.88});
+        const charred=standard(()=>new T.Color(0x412524),{roughness:1});
+        box(.052,.76,.048,matchwood,0,.37,0,matchShaft);
+        const matchHead=mesh(new T.SphereGeometry(.064,14,9),unstruck,0,.01,0,matchShaft);
+        matchHead.scale.set(.91,1.19,.86);
+        const matchFlame=makeFlame(matchFire,[0,-.02,0],.28,6.2);
+        const sparkMaterial=flat(()=>new T.Color(0xffad29),{depthWrite:false});
+        const sparkShape=new T.SphereGeometry(1,6,5);
+        const matchSparks=Array.from({length:7},()=>mesh(sparkShape,sparkMaterial,0,0,0,match,12));
+        const tubeBase=tube.quaternion.clone();
+        const U=T.MathUtils, twoPi=2*Math.PI;
+        const oxy=flat(p=>mix(p.oxygen,p.bg,.17),{transparent:true,opacity:.93,depthWrite:false});
+        const bubbleMaterial=glass(p=>mix(p.oxygen,p.water,.35),.95);
+        const bubbleRim=flat(p=>mix(p.oxygen,p.bg,.08),{transparent:true,opacity:.62,depthWrite:false});
+        const highlightedBubbleRim=flat(p=>mix(p.water,p.bg,.13),{transparent:true,opacity:.98,depthWrite:false});
+        const dotGeo=new T.SphereGeometry(1,12,10), ringGeo=new T.TorusGeometry(1,.13,5,20);
+        const dots=Array.from({length:13},()=>mesh(dotGeo,oxy,0,0,0,scene,11));
+        const bubbles=Array.from({length:10},()=>{
+          const ob=new T.Group();
+          mesh(dotGeo,bubbleMaterial,0,0,0,ob,10);
+          mesh(ringGeo,bubbleRim,0,0,0,ob,11);
+          scene.add(ob);
+          return ob;
+        });
+        const gasLabel=document.createElement('span');
+        gasLabel.className='lab-pin viz-badge';
+        gasLabel.textContent='O₂';
+        gasLabel.style.pointerEvents='none';
+        gasLabel.hidden=true;
+        el('pins').append(gasLabel);
+
+        const parts = [
+          ['高锰酸钾',[-4.05,2.39,.32],[-.71,-1.18], '--lab-grains','深紫色的高锰酸钾受热分解，放出氧气。'],
+          ['橡胶塞',[-.48,2.22,.32],[-.38,.61], null,'带孔的橡胶塞封住试管口，导管从孔中穿过。'],
+          ['玻璃导管',[.34,1.92,.32],[.06,-1.21], null,'两段玻璃导管斜向下连接，导管末端浸在水中并朝上伸入集气瓶。'],
+          ['集气瓶',[2.68,3.27,.32],[.42,-.85], '--lab-water','集气瓶的瓶口朝下并浸在水里，氧气积在瓶内上方。'],
+          ['酒精灯',[-3.88,.78,.40],[-.20,1.68], '--lab-heat','酒精灯加热试管中装有高锰酸钾的一端。'],
+          ['水槽',[4.08,.50,1.48],[.70,1.05], '--lab-water','瓶内的水被氧气排出，经浸没的瓶口流回水槽。'],
+          ['铁架台',[-4.1,3.46,-1.03],[.11,-.55], null,'铁架台夹住试管，使管口略低于装药品的一端。'],
+          ['棉花',[-.99,2.28,.35],[-.48,-.6], null,'试管口内侧的棉花可阻挡高锰酸钾粉末进入导管。'],
+          ['橡胶管',pipeRoute.getPoint((sleeveStart+sleeveEnd)/2).toArray(),[.56,-.85],'--lab-heat','这段橡胶管套住两段玻璃导管的端部，把它们接成一条气路。']
+        ].map(([name,xyz,offset,tint,detail],index)=>{
+          const btn=document.createElement('button');
+          btn.type='button';
+          btn.className='btn btn-ghost lab-pin';
+          btn.textContent=name;
+          btn.setAttribute('aria-pressed','false');
+          el('pins').append(btn);
+          const svgNS='http://www.w3.org/2000/svg';
+          const leader=document.createElementNS(svgNS,'line');
+          leader.setAttribute('stroke','currentColor');
+          leader.setAttribute('stroke-opacity','.54');
+          const point=document.createElementNS(svgNS,'circle');
+          point.setAttribute('r','2.5');
+          point.setAttribute('fill',tint ? 'var('+tint+')' : 'currentColor');
+          el('lines').append(leader,point);
+          return {name,xyz:V(...xyz),offset,tint,detail,index,btn,leader,point};
+        });
+        const placed=new Set();
+        let chosen=null, assembled=false, drag=null, loose=null, lastPointerAction=-Infinity;
+        const supplies = [
+          ['stand','铁架台','pipette',[-4.12,3.31,-1.03],[-22,-14]],
+          ['tube','试管','test-tube-diagonal',[-2.82,2.58,.32],[3,-24]],
+          ['lamp','酒精灯','flame',[-3.88,.56,.43],[-14,17]],
+          ['pipe','带塞导管','route',[.66,1.72,.32],[1,-24]],
+          ['tank','水槽','waves',[4.0,.53,1.14],[13,20]],
+          ['jar','集气瓶','cylinder',[laterJar.x,2.18,laterJar.z],[20,-18]]
+        ];
+        const targets = el('targets');
+        const ghost=new Map();
+        const guideMat=flat(p=>mix(p.water,p.bg,.30),{transparent:true,opacity:.11,depthWrite:false});
+        const hotGuideMat=flat(p=>mix(p.oxygen,p.bg,.18),{transparent:true,opacity:.29,depthWrite:false});
+        const guideLines=color(new T.LineBasicMaterial({transparent:true,opacity:.21,depthWrite:false}),p=>p.water);
+        const guideMeshes = {};
+        scene.updateMatrixWorld(true);
+        const previewScene=new T.Scene();
+        previewScene.environment=environment.texture;
+        const previewCam=new T.OrthographicCamera(-1,1,1,-1,.1,60);
+        previewScene.add(...scene.children.filter(ob=>ob.isLight).map(ob=>ob.clone()));
+        function instrumentPreview(id){
+          const icon=new T.Group();
+          apparatus.get(id).traverseVisible(ob=>{
+            if(!ob.isMesh||ob.userData.contactShadow||ob.material.isShaderMaterial&&ob.geometry.type==='PlaneGeometry'||
+              crystals.includes(ob)||cottonTufts.includes(ob)) return;
+            const part=new T.Mesh(ob.geometry,ob.material);
+            part.matrix.copy(ob.matrixWorld);
+            part.matrixAutoUpdate=false;
+            part.renderOrder=ob.renderOrder;
+            icon.add(part);
+          });
+          previewScene.add(icon);
+          icon.updateMatrixWorld(true);
+          const bounds=new T.Box3().setFromObject(icon);
+          const center=bounds.getCenter(V(0,0,0));
+          previewCam.position.copy(center).add(id==='pipe'?V(2.2,2.3,11):V(3.2,4.3,11));
+          previewCam.lookAt(center);
+          previewCam.updateMatrixWorld();
+          let sx=0,sy=0;
+          for(const x of [bounds.min.x,bounds.max.x]) for(const y of [bounds.min.y,bounds.max.y]) for(const z of [bounds.min.z,bounds.max.z]){
+            const v=V(x,y,z).applyMatrix4(previewCam.matrixWorldInverse);
+            sx=Math.max(sx,Math.abs(v.x));sy=Math.max(sy,Math.abs(v.y));
+          }
+          const height=85,width=148,half=Math.max(sy,sx*height/width,.2)*1.09;
+          previewCam.top=half;previewCam.bottom=-half;
+          previewCam.left=-half*width/height;previewCam.right=-previewCam.left;
+          previewCam.updateProjectionMatrix();
+          renderer.setSize(width,height,false);
+          renderer.render(previewScene,previewCam);
+          previewScene.remove(icon);
+          return canvas.toDataURL('image/png');
+        }
+        for(const [id] of supplies){
+          const group=new T.Group();
+          const members=[];
+          apparatus.get(id).traverse(obj=>{
+            if(obj.isMesh && obj.visible) members.push(obj);
+          });
+          const hints=members.filter(obj=>{
+            if(obj.userData.contactShadow||obj.parent===flame||obj.material.isShaderMaterial&&obj.geometry.type==='PlaneGeometry') return false;
+            if(['IcosahedronGeometry','DodecahedronGeometry','TorusGeometry'].includes(obj.geometry.type)) return false;
+            if(id==='jar') return obj===jarBody;
+            if(id==='tank') return obj.userData.blenderModel==='tank';
+            return true;
+          });
+          guideMeshes[id]=[];
+          hints.forEach(obj=>{
+            const shape=new T.Mesh(obj.geometry,guideMat);
+            shape.matrix.copy(obj.matrixWorld);
+            shape.matrixAutoUpdate=false;
+            shape.renderOrder=2;
+            group.add(shape);
+            guideMeshes[id].push(shape);
+            const edges=new T.LineSegments(new T.EdgesGeometry(obj.geometry,30),guideLines);
+            edges.matrix.copy(obj.matrixWorld);
+            edges.matrixAutoUpdate=false;
+            edges.renderOrder=3;
+            group.add(edges);
+          });
+          scene.add(group);
+          ghost.set(id,group);
+        }
+        const slotList=supplies.map(([id,name,icon,xyz,offset],i)=>{
+          const item=el('library').querySelector('[data-instrument="'+id+'"]')||document.createElement('button');
+          if(!item.parentNode){
+            item.type='button';
+            item.draggable=true;
+            item.dataset.instrument=id;
+            item.className='instrument';
+            const mark=document.createElement('i');
+            mark.dataset.lucide=icon;
+            mark.setAttribute('aria-hidden','true');
+            const text=document.createElement('span');
+            text.textContent=name;
+            item.append(mark,text);
+            el('library').append(item);
+          }
+          const preview=document.createElement('img');
+          preview.className='instrument-preview';
+          preview.alt='';
+          preview.width=148;
+          preview.height=85;
+          preview.draggable=false;
+          preview.src=instrumentPreview(id);
+          const mark=item.querySelector('[data-lucide]');
+          if(mark) mark.replaceWith(preview); else item.prepend(preview);
+          const targetBtn=document.createElement('button');
+          targetBtn.type='button';
+          targetBtn.className='lab-target assembly-slot';
+          targetBtn.dataset.slot=id;
+          targetBtn.setAttribute('aria-label','放置'+name);
+          const number=document.createElement('span');
+          number.className='lab-target-number slot-index';
+          number.textContent=String(i+1).padStart(2,'0');
+          number.setAttribute('aria-hidden','true');
+          const title=document.createElement('span');
+          title.className='lab-target-name slot-name';
+          title.textContent=name;
+          targetBtn.append(number,title);
+          targets.append(targetBtn);
+          const bounds=new T.Box3().setFromObject(ghost.get(id));
+          const slot={id,name,item,preview,btn:targetBtn,xyz:V(...xyz),offset,bounds};
+          item.addEventListener('dragstart',e=>e.preventDefault());
+          item.addEventListener('pointerdown',e=>startDrag(e,slot,false));
+          item.addEventListener('click',e=>{
+            if(e.detail===0||performance.now()-lastPointerAction>400) choose(chosen===id?null:id);
+          });
+          targetBtn.addEventListener('click',()=>place(id,chosen));
+          return slot;
+        });
+        window.lucide?.createIcons();
+        const nextInstrument=()=>slotList.find(slot=>!placed.has(slot.id));
+        function startDrag(e,slot,fromStage){
+          if(drag||slot.item.disabled||e.button!==0) return;
+          e.preventDefault();
+          e.currentTarget.setPointerCapture(e.pointerId);
+          const r=stage.getBoundingClientRect();
+          const [ax,ay]=fromStage?coords(slot.xyz.clone().add(loose.delta)):[e.clientX-r.left,e.clientY-r.top];
+          drag={id:e.pointerId,slot,fromStage,avatar:null,x:e.clientX,y:e.clientY,
+            gripX:ax-(e.clientX-r.left),gripY:ay-(e.clientY-r.top),original:loose,hit:false,inside:false};
+        }
+        function projectedBox(slot,delta){
+          const {min,max}=slot.bounds;
+          let left=Infinity,top=Infinity,right=-Infinity,bottom=-Infinity;
+          for(const x of [min.x,max.x]) for(const y of [min.y,max.y]) for(const z of [min.z,max.z]){
+            const [a,b]=coords(V(x,y,z).add(delta));
+            left=Math.min(left,a);top=Math.min(top,b);right=Math.max(right,a);bottom=Math.max(bottom,b);
+          }
+          return {left,top,right,bottom};
+        }
+        function nearAssemblyArea(slot,x,y,type){
+          const box=projectedBox(slot,V(0,0,0));
+          const padding=type==='touch'?27:22;
+          return x>=box.left-padding&&x<=box.right+padding&&y>=box.top-padding&&y<=box.bottom+padding;
+        }
+        function moveDrag(e){
+          if(drag?.id!==e.pointerId) return;
+          if(!drag.avatar){
+            if(Math.hypot(e.clientX-drag.x,e.clientY-drag.y)<5) return;
+            drag.avatar=drag.slot.preview.cloneNode();
+            drag.avatar.className='instrument-drag-preview';
+            document.body.append(drag.avatar);
+            root.dataset.dragging=drag.slot.id;
+            choose(drag.slot.id);
+          }
+          const r=stage.getBoundingClientRect();
+          drag.pointer={x:e.clientX-r.left,y:e.clientY-r.top,type:e.pointerType};
+          drag.avatar.style.left=e.clientX+'px';drag.avatar.style.top=e.clientY+'px';
+          updateDragPosition();
+          request();
+        }
+        function updateDragPosition(){
+          const {slot,pointer:{x,y,type}}=drag;
+          drag.inside=x>=0&&y>=0&&x<=width&&y<=height;
+          if(x>30&&x<width-30&&y>30&&y<height-30) drag.edgeReady=true;
+          drag.avatar.hidden=drag.inside;
+          drag.hit=false;
+          if(drag.inside){
+            const [sx,sy]=coords(slot.xyz);
+            const r=stage.getBoundingClientRect();
+            const dropSlot=slot.btn.getBoundingClientRect();
+            const tx=dropSlot.left+dropSlot.width/2-r.left,ty=dropSlot.top+dropSlot.height/2-r.top;
+            const ax=x+drag.gripX,ay=y+drag.gripY;
+            const radius=type==='touch'?35:34;
+            const markerDistance=slot.btn.style.visibility==='hidden'?Infinity:Math.hypot(x-tx,y-ty);
+            drag.hit=freeMode?nearAssemblyArea(slot,ax,ay,type):Math.min(Math.hypot(ax-sx,ay-sy),markerDistance)<=radius;
+            let delta=V(0,0,0);
+            if(!drag.hit){
+              const depth=slot.xyz.clone().project(camera).z;
+              delta=V(2*ax/width-1,1-2*ay/height,depth).unproject(camera).sub(slot.xyz);
+            }
+            loose={slot,delta};
+          } else {
+            loose=null;
+            apparatus.get(slot.id).position.set(0,0,0);
+            apparatus.get(slot.id).visible=false;
+          }
+          slot.btn.classList.toggle('is-over',drag.hit);
+        }
+        function endDrag(e,dropped){
+          if(drag?.id!==e.pointerId) return;
+          if(drag.avatar&&dropped) moveDrag(e);
+          const held=drag;
+          drag=null;
+          lastPointerAction=performance.now();
+          held.avatar?.remove();
+          delete root.dataset.dragging;
+          held.slot.btn.classList.remove('is-over');
+          if(!held.avatar){
+            if(dropped&&!held.fromStage) choose(chosen===held.slot.id?null:held.slot.id);
+            return;
+          }
+          if(dropped&&held.hit) place(held.slot.id,held.slot.id);
+          else if(!dropped||!held.inside) {
+            loose=held.original;
+            if(!loose) {
+              const group=apparatus.get(held.slot.id);
+              group.position.set(0,0,0);
+              group.visible=false;
+            }
+          }
+          request();
+        }
+        document.addEventListener('pointermove',moveDrag);
+        document.addEventListener('pointerup',e=>endDrag(e,true));
+        document.addEventListener('pointercancel',e=>endDrag(e,false));
+        function updateAssembly() {
+          const next=nextInstrument();
+          assembled=!next;
+          root.dataset.mode=assembled?'demo':'assembly';
+          root.dataset.active=chosen||'';
+          const a=el('assembly-step'), b=el('demo-step')||el('experiment-step');
+          a.toggleAttribute('data-complete',assembled);
+          if(assembled) {a.removeAttribute('aria-current');b.setAttribute('aria-current','step');}
+          else {b.removeAttribute('aria-current');a.setAttribute('aria-current','step');}
+          el('assembly-count').textContent=placed.size+' / '+supplies.length;
+          el('reset-assembly').disabled=placed.size===0&&chosen===null;
+          for(const {id,btn,item} of slotList){
+            const inPlace=placed.has(id);
+            const current=id===next?.id;
+            item.disabled=!current;
+            item.draggable=false;
+            item.toggleAttribute('data-placed',inPlace);
+            item.toggleAttribute('data-current',current);
+            item.setAttribute('aria-pressed',String(id===chosen));
+            apparatus.get(id).visible=inPlace;
+            ghost.get(id).visible=current&&!freeMode;
+            for(const obj of guideMeshes[id]) obj.material=id===chosen?hotGuideMat:guideMat;
+            btn.hidden=!current;
+            btn.classList.toggle('is-target',id===chosen);
+          }
+          el('pins').hidden=!assembled;
+          el('lines').toggleAttribute('hidden',!assembled);
+          refreshProcedure();
+          syncAction();
+          request();
+        }
+        function assemblyNote(message,tone='water'){
+          el('note').style.setProperty('--lab-note-color','var(--lab-'+tone+')');
+          el('note-text').textContent=message;
+        }
+        function choose(id){
+          if(assembled||id!==null&&id!==nextInstrument()?.id) return;
+          chosen=id;
+          updateAssembly();
+          assemblyNote((id?'已选：':'当前：')+nextInstrument().name+'。');
+        }
+        function place(id, picked){
+          if(assembled||id!==nextInstrument()?.id) return;
+          if(!picked){assemblyNote('请先选中仪器库里的仪器。');return;}
+          if(picked!==id){assemblyNote('这里放置'+slotList.find(s=>s.id===id).name+'。','heat');return;}
+          placed.add(id);
+          chosen=null;
+          loose=null;
+          apparatus.get(id).position.set(0,0,0);
+          delete root.dataset.dragging;
+          updateAssembly();
+          if(assembled){
+            assemblyNote('仪器已装齐。先检查装置气密性。','oxygen');
+            if(!freeMode&&document.activeElement===slotList.find(s=>s.id===id).btn) actionSource.focus();
+          } else {
+            const next=nextInstrument();
+            assemblyNote(slotList.find(s=>s.id===id).name+'已就位。下一件：'+next.name+'。','oxygen');
+            if(document.activeElement===slotList.find(s=>s.id===id).btn) next?.item.focus();
+          }
+        }
+        el('reset-assembly').addEventListener('click',()=>{
+          placed.clear(); chosen=null;
+          drag?.avatar?.remove(); drag=null; loose=null;
+          apparatus.forEach(group=>group.position.set(0,0,0));
+          delete root.dataset.dragging;
+          resetExperiment();
+          resetView();
+          updateAssembly();
+          assemblyNote('当前：'+nextInstrument().name+'。');
+        });
+
+        let selected=-1, phase=-1, step=0;
+        const collectionStep=4, removeTubeStep=5, extinguishStep=6;
+        const procedure = [
+          ['查','检查气密性','将导管口浸入水中，用热毛巾微热空试管。导管口冒出气泡，说明装置气密性良好。'],
+          ['装','装药和棉花','横放干燥试管，把盛有少量高锰酸钾的纸槽送到管底。抬高管口使药品滑落，抽出纸槽，再在管口内侧放一团疏松棉花。'],
+          ['定','固定装置','塞紧橡胶塞，将铁夹夹在距试管口约三分之一处，让管口略向下，再调整试管高度，使酒精灯外焰能加热试管。先把导管口放入水中。'],
+          ['点','点灯、预热','划燃火柴并点燃酒精灯。在试管底部附近左右拖动酒精灯预热，再用外焰对准药品所在部位加热。'],
+          ['收','排水集气','将装满水的集气瓶盖好并倒置入水，在水下移开玻璃片。先在瓶口外观察气泡，确认连续、均匀后，再把导管伸到瓶口下。集满后在水下盖好玻璃片，取出并正放在实验桌上。'],
+          ['离','移出导管','把导管移出水槽。此时酒精灯仍在燃烧。'],
+          ['熄','熄灭酒精灯','用灯帽盖灭酒精灯。先移出导管，再停止加热，可防止水倒吸进试管。']
+        ];
+        const verificationStep=procedure.length;
+        const proc=el('procedure');
+        const procRows=procedure.map(([label,name],i)=>{
+          const li=document.createElement('li');
+          const row=document.createElement('button');
+          row.type='button';
+          row.className='step-row';
+          row.dataset.procedureStep=i;
+          row.addEventListener('click',()=>rewindTo(i));
+          const number=document.createElement('span');
+          number.className='step-number';
+          number.textContent=String(i+1).padStart(2,'0');
+          const title=document.createElement('span');
+          title.className='step-label';
+          title.textContent=label+' · '+name;
+          const back=document.createElement('span');
+          back.className='step-back';
+          back.setAttribute('aria-hidden','true');
+          back.textContent='↶';
+          row.append(number,title,back);
+          li.append(row);
+          proc?.append(li);
+          return {li,row};
+        });
+        function refreshProcedure() {
+          procRows.forEach(({li,row},i)=>{
+            const current=assembled&&step===i;
+            const complete=assembled&&i<step;
+            li.dataset.stepState=complete?'complete':current?'current':'pending';
+            if(current) li.setAttribute('aria-current','step'); else li.removeAttribute('aria-current');
+            row.disabled=!complete&&!current;
+            row.setAttribute('aria-disabled',String(!complete));
+            row.tabIndex=complete?0:-1;
+            if(complete) row.title='返回'+procedure[i][1]; else row.removeAttribute('title');
+          });
+          const detail=el('step-detail');
+          if(!detail) return;
+          if(!assembled) detail.textContent='';
+          else if(step<verificationStep) detail.textContent=procedure[step][2];
+          else if(step>verificationStep) detail.textContent='带火星的小木条复燃，证明收集到的是氧气。';
+          else if(verifying) detail.textContent='移开集气瓶上的玻璃片，将带火星的小木条伸进集气瓶，观察它是否复燃。';
+          else detail.textContent='集气瓶已盖好玻璃片，正放在实验桌上。';
+        }
+        const feedback=[
+          '准备检查气密性。',
+          '热毛巾温热试管。导管口冒出气泡，气密性良好。',
+          '高锰酸钾和棉花已放入试管。',
+          '试管口略向下，导管口已伸入水中。',
+          '酒精灯已点燃。',
+          '气泡已连续、均匀，可以开始收集氧气。',
+          '氧气进入倒置集气瓶，瓶内水面逐渐下降。',
+          '在水下盖好玻璃片，再取出集气瓶。',
+          '导管已离开水槽，防止水倒吸。',
+          '酒精灯已用灯帽盖灭。',
+          '把带火星的木条伸入集气瓶。',
+          '带火星的小木条复燃，检验为氧气。',
+          '横放干燥试管，用纸槽把高锰酸钾送到管底。',
+          '抬高试管口，让高锰酸钾从纸槽滑落到管底。',
+          '抽出纸槽，在试管口内侧放一团疏松棉花。',
+          '已调好试管高度，外焰对准试管底部。',
+          '在试管底部附近左右拖动酒精灯预热，再集中加热药品部位。',
+          '先把集气瓶装满水，盖好玻璃片后再倒置入水槽。',
+          '已在水下移开玻璃片。先观察导管口，气泡连续、均匀后再收集。',
+          '集气瓶已盖好玻璃片，正放在实验桌上。'
+        ];
+        function updateNote() {
+          const part=parts[selected];
+          el('note-text').textContent = part ? part.detail : feedback[Math.max(0,phase)];
+          el('note').style.setProperty('--lab-note-color',part
+            ? (part.tint ? 'var('+part.tint+')' : 'var(--muted-foreground)')
+            : (phase<=3?'var(--lab-water)':phase===4||phase===9?'var(--lab-heat)':'var(--lab-oxygen)'));
+        }
+        function selectPart(index) {
+          selected=index;
+          parts.forEach(p=>p.btn.setAttribute('aria-pressed',String(p.index===selected)));
+          updateNote();
+        }
+        parts.forEach(p=>p.btn.addEventListener('click',()=>selectPart(selected===p.index?-1:p.index)));
+
+        const homeTarget=V(-.06,1.69,.07), target=homeTarget.clone();
+        const home={az:.25,tilt:.295,zoom:1};
+        let az=home.az,tilt=home.tilt,zoom=home.zoom, width=0,height=0,panMode=false;
+        const panButton=el('pan');
+        function setPanMode(value){
+          panMode=value;
+          panButton.setAttribute('aria-pressed',String(value));
+          stage.dataset.view=value?'pan':'orbit';
+        }
+        const resetView=()=>{az=home.az;tilt=home.tilt;zoom=1;target.copy(homeTarget);setPanMode(false);request();};
+        const viewWidth=()=>Math.max(6.32,2.94*width/height)/zoom;
+        function panCanvas(dx,dy){
+          const horizontal=2*viewWidth()/width;
+          const forward=dy*horizontal/Math.max(.36,Math.sin(tilt));
+          target.x-=dx*horizontal*Math.cos(az)+forward*Math.sin(az);
+          target.z+=dx*horizontal*Math.sin(az)-forward*Math.cos(az);
+        }
+        function positionCamera() {
+          const radius=19;
+          camera.position.set(target.x+radius*Math.sin(az)*Math.cos(tilt),
+            target.y+radius*Math.sin(tilt),target.z+radius*Math.cos(az)*Math.cos(tilt));
+          camera.lookAt(target);
+          const xo=viewWidth(), yo=xo*height/width;
+          camera.left=-xo;camera.right=xo;camera.top=yo;camera.bottom=-yo;
+          camera.updateProjectionMatrix();
+          camera.updateMatrixWorld();
+          // Align by whole cells so panning can continue indefinitely without a visible seam.
+          backgroundGrid.position.x=Math.round(target.x/2.5)*2.5;
+          backgroundGrid.position.z=Math.round(target.z/2.5)*2.5;
+          backgroundGridMaterial.uniforms.focus.value.set(
+            target.x-backgroundGrid.position.x,backgroundGrid.position.z-target.z
+          );
+        }
+        function coords(v) {
+          const p=v.clone().project(camera);
+          return [(p.x+1)*width*.5,(1-p.y)*height*.5];
+        }
+        function anchor(p,x,y,rect){
+          const [l,t,w,h]=rect;
+          p.leader.setAttribute('x1',x);
+          p.leader.setAttribute('y1',y);
+          p.leader.setAttribute('x2',U.clamp(x,l+2,l+w-2));
+          p.leader.setAttribute('y2',U.clamp(y,t+2,t+h-2));
+          p.point.setAttribute('cx',x);
+          p.point.setAttribute('cy',y);
+        }
+        function layoutPins() {
+          const occupied=[];
+          for(const p of parts){
+            const [x,y]=coords(p.xyz);
+            const hidden=p.relevant===false||x<3||x>width-3||y<3||y>height-3;
+            p.btn.hidden=hidden;
+            p.leader.style.display=p.point.style.display=hidden?'none':'';
+            if(hidden) continue;
+            const w=p.btn.offsetWidth,h=p.btn.offsetHeight;
+            const gx=(width<460?27:48), gy=(width<460?27:44);
+            const tx=x+p.offset[0]*gx-w/2, ty=y+p.offset[1]*gy-h/2;
+            const dxs=[0,-.36*w,.36*w,-.82*w,.82*w,-1.25*w,1.25*w];
+            const dys=[0,-.7*h,.7*h,-1.45*h,1.45*h,-2.1*h,2.1*h];
+            let best,score=Infinity;
+            for(const dx of dxs) for(const dy of dys){
+              const l=U.clamp(tx+dx,1,width-w-1), t=U.clamp(ty+dy,1,height-h-1);
+              const overlaps=occupied.reduce((n,[a,b,c,d])=>n+Math.max(0,Math.min(a+c+3,l+w+3)-Math.max(a,l))*Math.max(0,Math.min(b+d+3,t+h+3)-Math.max(b,t)),0);
+              const cost=overlaps*30+Math.hypot(l-tx,t-ty)+.05*Math.hypot(dx,dy);
+              if(cost<score){best=[l,t,w,h];score=cost;}
+            }
+            occupied.push(best);
+            p.btn.style.transform='translate('+best[0]+'px,'+best[1]+'px)';
+            anchor(p,x,y,best);
+          }
+        }
+        function layoutTargets(){
+          const rects=[];
+          for(const {btn,xyz,offset,id} of slotList){
+            if(btn.hidden) continue;
+            const [x,y]=coords(xyz);
+            const inView=x>=0&&x<=width&&y>=0&&y<=height;
+            btn.style.visibility=inView?'':'hidden';
+            if(!inView) continue;
+            const w=btn.offsetWidth,h=btn.offsetHeight;
+            const tx=x+offset[0]-w/2, ty=y+offset[1]-h/2;
+            let best,score=Infinity;
+            for(const dx of [0,-w/2,w/2,-w,w]) for(const dy of [0,-h,h,-h*2,h*2]){
+              const l=U.clamp(tx+dx,5,Math.max(5,width-w-5)),t=U.clamp(ty+dy,5,Math.max(5,height-h-5));
+              const overlap=rects.reduce((n,[a,b,c,d])=>n+Math.max(0,Math.min(a+c+4,l+w+4)-Math.max(a,l))*Math.max(0,Math.min(b+d+4,t+h+4)-Math.max(b,t)),0);
+              const cost=overlap*25+Math.hypot(l-tx,t-ty)+.05*Math.hypot(dx,dy);
+              if(cost<score){best=[l,t,w,h];score=cost;}
+            }
+            rects.push(best);
+            btn.style.left=best[0]+'px';
+            btn.style.top=best[1]+'px';
+            btn.style.transform='none';
+          }
+        }
+        const resize=new ResizeObserver(()=>{
+          width=stage.clientWidth;height=stage.clientHeight;
+          if(width&&height){renderer.setSize(width,height,false);request();}
+        });
+        resize.observe(stage);
+        document.fonts?.ready.then(request);
+        const recolor=()=>{pal=palette();themed.forEach(apply=>apply(pal));request();};
+        matchMedia('(prefers-color-scheme: dark)').addEventListener('change',recolor);
+        const look=new MutationObserver(recolor);
+        [document.documentElement,document.body].forEach(e=>look.observe(e,{attributes:true,attributeFilter:['style','class','data-theme','data-bs-theme']}));
+        const changeZoom=f=>{zoom=U.clamp(zoom*f,.72,2.4);request();};
+        el('zoom-in').addEventListener('click',()=>changeZoom(1.17));
+        el('zoom-out').addEventListener('click',()=>changeZoom(1/1.17));
+        el('orbit').addEventListener('click',()=>{az=(az+.35)%twoPi; request();});
+        el('home').addEventListener('click',resetView);
+        panButton.addEventListener('click',()=>setPanMode(!panMode));
+        panButton.addEventListener('keydown',e=>{
+          if(!panMode||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)) return;
+          e.preventDefault();
+          panCanvas(e.key==='ArrowLeft'?48:e.key==='ArrowRight'?-48:0,e.key==='ArrowUp'?48:e.key==='ArrowDown'?-48:0);
+          request();
+        });
+        canvas.addEventListener('wheel',e=>{e.preventDefault();changeZoom(Math.exp(-U.clamp(e.deltaY,-150,150)*.002));},{passive:false});
+        canvas.addEventListener('contextmenu',e=>e.preventDefault());
+        const fingers=new Map();
+        const distance=()=>{const [a,b]=fingers.values();return Math.hypot(a.x-b.x,a.y-b.y);};
+        canvas.addEventListener('pointerdown',e=>{
+          if(fingers.size>=2||drag||actionTouch||e.pointerType==='mouse'&&e.button>2) return;
+          const pan=panMode||e.button===1||e.button===2||e.shiftKey;
+          if(!pan&&!fingers.size&&actionPointerDown(e,false)) return;
+          if(!pan&&!fingers.size&&loose){
+            const r=stage.getBoundingClientRect(), x=e.clientX-r.left,y=e.clientY-r.top;
+            const b=projectedBox(loose.slot,loose.delta);
+            if(x>=b.left&&x<=b.right&&y>=b.top&&y<=b.bottom){
+              startDrag(e,loose.slot,true);
+              return;
+            }
+          }
+          canvas.setPointerCapture(e.pointerId);
+          fingers.set(e.pointerId,{x:e.clientX,y:e.clientY,pan,moved:fingers.size>0});
+        });
+        canvas.addEventListener('pointermove',e=>{
+          if(!fingers.has(e.pointerId)) return;
+          const old=fingers.get(e.pointerId), gap=fingers.size===2?distance():0;
+          const dx=e.clientX-old.x,dy=e.clientY-old.y;
+          fingers.set(e.pointerId,{x:e.clientX,y:e.clientY,pan:old.pan,moved:old.moved||!!(dx||dy)});
+          if(fingers.size===2&&gap>0){
+            panCanvas(dx/2,dy/2);
+            changeZoom(distance()/gap);
+          }
+          else if(fingers.size===1){
+            if(old.pan) panCanvas(dx,dy);
+            else {
+              az=(az-dx*.009)%twoPi;
+              tilt=U.clamp(tilt+dy*.007,-.12,1.22);
+            }
+            request();
+          }
+        });
+        canvas.addEventListener('pointerup',e=>{
+          const pointer=fingers.get(e.pointerId);
+          if(freeMode&&!assembled&&chosen&&fingers.size===1&&pointer&&!pointer.pan&&!pointer.moved){
+            const r=stage.getBoundingClientRect(),slot=nextInstrument();
+            if(nearAssemblyArea(slot,e.clientX-r.left,e.clientY-r.top,e.pointerType)) place(slot.id,chosen);
+          }
+          fingers.delete(e.pointerId);
+        });
+        ['pointercancel','lostpointercapture'].forEach(evt=>canvas.addEventListener(evt,e=>fingers.delete(e.pointerId)));
+
+        const waterFullAt=1.5, prepCapAt=2.25, immerseAt=3.85, uncoverAt=4.64;
+        const bubblesReadyAt=8.24, fillStart=8.89, fillEnd=16.64, outletClearAt=17.24, capAt=18.05, liftAt=19.65;
+        const seedPoint=V(-4.11,2.49,.32);
+        let time=0,raf=0,steadyAt=0,actionIndex=0,actionTouch=null,reaction=null,heldSource=false;
+        const reduced=matchMedia('(prefers-reduced-motion: reduce)');
+        reduced.addEventListener('change',()=>request());
+        const lampCap=blenderMesh('lampCap',porcelain,lampX,burnerSeat,lampZ);
+        lampCap.name='Porcelain snuffer cap';
+        lampCap.visible=false;
+        const zAxis=V(0,0,1);
+        const originalJarPin=parts[3].xyz.clone();
+        const originalLampPin=parts[4].xyz.clone();
+        const tubePins=[0,7].map(i=>[i,parts[i].xyz.clone().sub(closed)]);
+        const inletPins=[1,2].map(i=>[i,parts[i].xyz.clone()]);
+        const towelStart=V(-2.94,3.62,.60), towelEnd=V(-3.92,2.90,.32);
+        const mouthWet=V(jarX,.71,jarZ), wick=V(lampX-.012,wickTip,lampZ);
+        const tiltStart=.83, tiltEnd=1.04, heightAt=1.86, dipAt=2.55;
+        const strikeAt=1.10, litAt=2.12, matchAwayAt=2.92, preheatedAt=3.65, heatingAt=4.55;
+        const hotOuterFlameY=flame.position.y+.90;
+        const matchStripStart=matchBoxCenter.clone().add(V(-.34,-.01,.322));
+        const matchStripEnd=matchBoxCenter.clone().add(V(.34,-.01,.322));
+        const matchStart=matchStripStart.clone().add(V(-.17,.36,.16));
+        const matchDiscard=matchBoxCenter.clone().add(V(.30,-.064,.54));
+        const alignedWick=wick.clone();
+        const clampGrip=V(standX,clampY,standZ);
+        const heightGripTarget=clampGrip.clone();
+        const lampGrip=V(lampX,.61,lampZ), preheatGrip=lampGrip.clone();
+        const preheatMin=closed.x+.04, preheatMax=closed.x+.99;
+        let preheatX=lampX, preheatVisited=0;
+        const capSeatGrip=V(lampX,burnerSeat+.22,lampZ);
+        const capRest=V(lampX+.85,.07,lampZ+.51);
+        const jarPark=V(laterJar.x,2.35,laterJar.z), jarBath=V(jarX,2.18,jarZ);
+        const testMouth=V(laterJar.x,jarRestPivot.y+jarPivot.y-plateCenterY,laterJar.z);
+        const jarMouthWet=V(jarX,plateCenterY+plateClearance,jarZ), waterPlateRest=V(1.2,.205,.70);
+        const prepPlateRest=testMouth.clone().add(V(-1.15,-2.91,.31));
+        const pitcherRest=testMouth.clone().add(V(1.08,-2.91,.21));
+        const pitcherPour=testMouth.clone().add(V(.54,.44,.08));
+        const plateRest=V(laterJar.x-1.12,3.3,laterJar.z+.45);
+        const splintRest=V(laterJar.x-1.18,3.53,laterJar.z+.27);
+        const mouthPoint=mouth.clone().add(V(0,.09,.12)), cottonStart=mouthPoint.clone().add(V(.88,.40,.1));
+        const carriedPlate=mesh(lid.geometry,lid.material,0,0,0,scene,9);
+        const pitcher=new T.Group();
+        const pitcherGlass=clearGlass({thickness:.022});
+        lathe([[0,0],[.34,0],[.35,.04],[.39,.74],[.37,.78],[.35,.76],[.31,.09],[0,.07]],pitcherGlass,0,0,0,pitcher,3);
+        const pitcherWater=cyl(.352,.316,.53,flat(waterTint,{transparent:true,opacity:.36,depthWrite:false}),0,.33,0,pitcher,2);
+        const pourStream=cyl(.037,.044,1,flat(waterTint,{transparent:true,opacity:.72,depthWrite:false}),0,0,0,scene,6);
+        const morphTube=mesh(new T.BufferGeometry(),pipeGlass,0,0,0,distalPipe,7);
+        const morphTip=torus(.077,.014,glassRim,0,0,0,distalPipe,8);
+        const wetPipe=new PipeSection(sleeveEnd,1);
+        let tubePose='', outletBlend;
+        function bendOutlet(from,to,progress,pose){
+          const quantized=Math.round(U.clamp(progress,0,1)*24)/24;
+          const state=pose+quantized;
+          if(tubePose===state) return;
+          tubePose=state;
+          const blend=new T.Curve();
+          blend.getPoint=(t,target=V(0,0,0))=>target.copy(from.getPoint(t)).lerp(to.getPoint(t),quantized);
+          outletBlend=blend;
+          morphTube.geometry.dispose();
+          morphTube.geometry=new T.TubeGeometry(blend,38,.086,13,false);
+          morphTip.position.copy(blend.getPoint(1));
+          morphTip.quaternion.setFromUnitVectors(zAxis,blend.getTangent(1));
+        }
+        const grip=(source,destination,from,to,start,end,hint,finish=end)=>({source,destination,from,to,start,end,finish,hint});
+        const observe=(start,end,hint,seconds)=>({start,end,hint,seconds});
+        const actions=[
+          [
+            grip('热毛巾','试管底部',towelStart,towelEnd,0,.74,'把热毛巾移到空试管底部，观察水中导管口。',2.30),
+            {kind:'confirm-bubbles',start:2.30,hint:'导管口冒出气泡，说明装置气密性良好。'}
+          ],
+          [
+            grip('装药纸槽','试管底部',V(.34,2.65,.66),V(-3.85,2.65,.66),.40,2.08,'把盛有高锰酸钾的纸槽推到试管底部。'),
+            grip('试管口','抬高到这里',V(-.66,2.59,.70),V(-.66,3.40,.70),2.08,2.73,'抬高试管口，让高锰酸钾滑落到管底。',3.50),
+            grip('纸槽手柄','抽出方向',V(-.31,3.35,.70),V(2.45,3.35,.70),3.50,4.55,'沿试管方向抽出纸槽。',4.83),
+            grip('棉花','试管口内侧',cottonStart,mouthPoint,4.83,5.56,'把疏松棉花放在试管口内侧。',6.20)
+          ],
+          [
+            grip('橡胶塞','试管口',mouthPoint.clone().add(V(.82,.35,.34)),mouthPoint.clone().add(V(0,.29,0)),0,tiltStart,'将橡胶塞推入试管口。'),
+            grip('试管口','略向下的位置',mouthPoint.clone().add(V(0,.33,0)),mouthPoint.clone().add(V(0,-.26,0)),tiltStart,tiltEnd,'把试管口调至略向下。'),
+            grip('铁夹','外焰加热高度',clampGrip,heightGripTarget,tiltEnd,heightAt,'调整铁夹高度，使酒精灯外焰能接触试管底部。'),
+            grip('导管末端','水面下',dryPipe.end,bathPipe.end,heightAt,dipAt,'先把导管口放到水面下，暂不伸入集气瓶。')
+          ],
+          [
+            grip('火柴','火柴盒擦火面',matchStart,matchStripEnd,0,strikeAt,'用火柴头划过火柴盒侧面的擦火条。'),
+            grip('燃着的火柴','酒精灯灯芯',matchStripEnd,alignedWick,strikeAt,litAt,'用划燃的火柴点燃酒精灯灯芯。',matchAwayAt),
+            {kind:'preheat',source:'酒精灯',start:matchAwayAt,hint:'按住酒精灯，在试管底部附近左右拖动，两端都到达后松开。'},
+            grip('酒精灯','装药一端的下方',preheatGrip,lampGrip,preheatedAt,heatingAt,'预热后将酒精灯移回装药处，用外焰集中加热。')
+          ],
+          [
+            grip('盛水容器','集气瓶口',pitcherRest.clone().add(V(0,.56,0)),testMouth,0,waterFullAt,'往正放的集气瓶里加水，直到装满。'),
+            grip('玻璃片','桌上的集气瓶口',prepPlateRest,testMouth,waterFullAt,prepCapAt,'用玻璃片盖严装满水的集气瓶。'),
+            grip('盖好玻璃片的集气瓶','水槽内的倒置位置',jarPark,jarBath,prepCapAt,immerseAt,'按住玻璃片，把装满水的集气瓶倒置在水槽里。'),
+            grip('水下的玻璃片','瓶口旁的水槽底',jarMouthWet,waterPlateRest,immerseAt,uncoverAt,'确认瓶口浸在水下，再移开玻璃片。'),
+            {kind:'observe-bubbles',start:uncoverAt,end:bubblesReadyAt,seconds:3.6,
+              hint:'观察瓶口外的导管口：气泡先零散冒出，等到连续、均匀时再收集。'},
+            {kind:'confirm-bubbles',start:bubblesReadyAt,hint:'导管口的气泡连续、均匀时，点击确认，再开始集气。'},
+            grip('导管末端','倒置的集气瓶口',bathPipe.end,mouthWet,bubblesReadyAt,fillStart,'气泡已连续、均匀冒出。把导管移到倒置的集气瓶口下。'),
+            observe(fillStart,fillEnd,'观察瓶内水位下降：氧气正在把水排出集气瓶。',5.8),
+            observe(fillEnd,outletClearAt,'集气完成。导管让开瓶口，末端仍留在水中。',.65),
+            grip('玻璃片','水中的集气瓶口',waterPlateRest,jarMouthWet,outletClearAt,capAt,'在水下用玻璃片盖住瓶口。'),
+            grip('装满氧气的集气瓶','水槽旁的实验桌面',jarBath,jarPark,capAt,liftAt,'按住玻璃片，取出集气瓶，翻转并正放在实验桌上。')
+          ],
+          [grip('导管末端','水面上方',bathPipe.end,dryPipe.end,0,.75,'保持酒精灯燃烧，先把导管提出水面。')],
+          [grip('灯帽','酒精灯',capRest.clone().add(V(0,.22,0)),capSeatGrip,0,.84,'把灯帽移到灯芯上方，再盖住酒精灯。')],
+          [
+            grip('玻璃片','集气瓶旁',testMouth,plateRest,0,.92,'移开盖在集气瓶口的玻璃片。'),
+            grip('带火星的小木条','集气瓶内',splintRest,V(laterJar.x,2.61,laterJar.z),.92,1.81,'将带火星的小木条伸进集气瓶。',2.90)
+          ]
+        ];
+        const alternateActions={
+          cotton:{
+            step:1,index:3,source:'橡胶塞',destination:'试管口',
+            from:actions[2][0].from,to:actions[2][0].to,
+            title:'没放棉花，粉末可能进入导管',
+            observing:'观察：加热后，细小的紫色粉末随气流进入导管。',
+            explanation:'高锰酸钾受热时，细小粉末可能随气流进入导管，污染甚至堵塞导管。',
+            correction:'塞紧前，在试管口内侧放一小团疏松棉花。它挡住粉末，让气体通过。',
+            seconds:3.1
+          },
+          tilt:{
+            step:2,index:1,source:'酒精灯',destination:'试管底部下方',
+            from:lampGrip,to:wick.clone().add(V(0,.44,0)),
+            title:'管口没有向下，冷凝水可能回流',
+            observing:'观察：管口附近凝结的水滴向受热的试管底部流动。',
+            explanation:'加热时，较冷的管口附近可能凝结水滴。管口没有略向下时，冷凝水可能回流到受热的试管底部，使玻璃骤冷破裂。',
+            correction:'固定装置时，把试管口调到比管底略低，再加热。',
+            seconds:3.0
+          },
+          order:{
+            step:removeTubeStep,index:0,source:'灯帽',destination:'酒精灯',
+            from:actions[extinguishStep][0].from,to:capSeatGrip,
+            title:'先熄灯，水可能倒吸',
+            observing:'观察：火焰熄灭后，水从水槽沿导管倒流。',
+            explanation:'熄灯后，装置内的气体冷却收缩，压强降低。导管口还浸在水里时，水可能倒吸进热试管，使玻璃骤冷破裂。',
+            correction:'集气结束后，先把导管移出水面，再用灯帽盖灭酒精灯。',
+            seconds:3.4
+          }
+        };
+        const freeSources=[
+          [[towel]],
+          [[chute],[tube],[chute],cottonTufts],
+          [[stopper,stopperLip],[tube],[clampMount,clampCollar],[distalPipe]],
+          [[match],[match],[lampBodyGroup],[lampBodyGroup]],
+          [[pitcher],[carriedPlate],[jarGroup],[carriedPlate],[],[],[distalPipe],[],[],[carriedPlate],[jarGroup]],
+          [[distalPipe]],
+          [[lampCap]],
+          [[lid,carriedPlate],[splint]]
+        ];
+        const freeAlternateSources={cotton:[stopper,stopperLip],tilt:[lampBodyGroup],order:[lampCap]};
+        let freeMode=false;
+        root.dataset.learningMode='guided';
+        const currentAlternate=()=>freeMode?Object.entries(alternateActions).find(([,op])=>op.step===step&&op.index===actionIndex):undefined;
+        let failureDemo=null,hazardDrag=null;
+        const actionOverlay=el('interactions');
+        const actionLine=document.createElement('div');
+        actionLine.className='lab-action-line';
+        const actionHint=document.createElement('div');
+        actionHint.className='lab-action-hint';
+        const actionStep=document.createElement('span');
+        actionStep.className='lab-action-step';
+        const actionMessage=document.createElement('span');
+        actionMessage.setAttribute('role','status');
+        actionHint.append(actionStep,actionMessage);
+        function actionButton(role,icon){
+          const btn=document.createElement('button');
+          btn.type='button';
+          btn.className='lab-action-'+role;
+          btn.dataset.action=role;
+          const mark=document.createElement('i');
+          mark.dataset.lucide=icon;
+          mark.setAttribute('aria-hidden','true');
+          btn.append(mark);
+          return btn;
+        }
+        const actionSource=actionButton('source','hand');
+        const actionDestination=actionButton('destination','crosshair');
+        const alternateSource=actionButton('source','hand');
+        const alternateDestination=actionButton('destination','crosshair');
+        alternateSource.dataset.action='alternate-source';
+        alternateDestination.dataset.action='alternate-destination';
+        const actionSvgNS='http://www.w3.org/2000/svg';
+        function guideSvg(className){
+          const svg=document.createElementNS(actionSvgNS,'svg');
+          svg.classList.add(className);
+          svg.setAttribute('aria-hidden','true');
+          return svg;
+        }
+        const guideElement=(svg,tag)=>{
+          const item=document.createElementNS(actionSvgNS,tag);
+          svg.append(item);
+          return item;
+        };
+        const drawGuide=(line,[x1,y1],[x2,y2])=>{
+          for(const [name,value] of Object.entries({x1,y1,x2,y2})) line.setAttribute(name,value);
+        };
+        const drawPoint=(point,[x,y])=>{
+          point.setAttribute('cx',x);point.setAttribute('cy',y);
+        };
+        const preheatTrack=guideSvg('lab-preheat-rail');
+        const preheatLine=guideElement(preheatTrack,'line');
+        const preheatEdges=['left','right'].map(edge=>{
+          const point=guideElement(preheatTrack,'circle');
+          point.setAttribute('r',4);
+          point.dataset.preheatEdge=edge;
+          return point;
+        });
+        actionOverlay.append(preheatTrack,actionLine,actionSource,actionDestination,alternateSource,alternateDestination,actionHint);
+        window.lucide?.createIcons();
+        let verifying=false;
+        const finished=()=>step>verificationStep||step===verificationStep&&!verifying;
+        const currentAction=()=>finished()?null:actions[step]?.[actionIndex];
+        const previousStep=el('previous-step'), mistakePreviousStep=el('mistake-previous-step');
+        const verificationButton=el('verify-oxygen');
+        const confirmBubbles=el('confirm-bubbles');
+        const guidedButton=el('guided-mode'),freeButton=el('free-mode');
+        function setLearningMode(free){
+          if(free===freeMode||drag||actionTouch||failureDemo) return;
+          freeMode=free;heldSource=false;alternateSelected=false;
+          root.dataset.learningMode=free?'free':'guided';
+          guidedButton.setAttribute('aria-pressed',String(!free));
+          freeButton.setAttribute('aria-pressed',String(free));
+          if(assembled){syncAction();request();}
+          else updateAssembly();
+        }
+        guidedButton.addEventListener('click',()=>setLearningMode(false));
+        freeButton.addEventListener('click',()=>setLearningMode(true));
+        confirmBubbles.addEventListener('click',()=>{
+          if(currentAction()?.kind!=='confirm-bubbles'||reaction||failureDemo) return;
+          advanceAction();
+          if(!freeMode) actionSource.focus({preventScroll:true});
+        });
+        const mistakeDialog=el('mistake-dialog'),retryStep=el('retry-step');
+        let suppressActionClick=0;
+        let preheatGuide, alternateSelected=false;
+        function resetExperiment(to=0){
+          step=to;time=0;phase=-1;selected=-1;actionIndex=0;steadyAt=0;verifying=false;
+          preheatX=lampX;preheatVisited=0;
+          reaction=null;heldSource=false;
+          failureDemo=null;hazardDrag=null;alternateSelected=false;
+          if(mistakeDialog.open) mistakeDialog.close();
+          delete mistakeDialog.dataset.mistake;
+          for(const part of parts) part.btn.setAttribute('aria-pressed','false');
+          clearActionDrag();
+        }
+        function rewindTo(to){
+          if(!assembled||to<0||to>=step||to>=verificationStep) return false;
+          resetExperiment(to);
+          refreshProcedure();
+          enterAction();
+          return true;
+        }
+        previousStep.addEventListener('click',()=>{
+          if(rewindTo(Math.min(step,verificationStep)-1)&&previousStep.disabled&&!freeMode) actionSource.focus({preventScroll:true});
+        });
+        mistakePreviousStep.addEventListener('click',()=>{
+          if(rewindTo(step-1)&&!previousStep.disabled) previousStep.focus({preventScroll:true});
+        });
+        function demonstrateMistake(id,pose={}){
+          const alternate=alternateActions[id];
+          if(!alternate||failureDemo||reaction) return;
+          failureDemo={id,progress:0,at:performance.now(),...pose};
+          hazardDrag=null;heldSource=false;alternateSelected=false;
+          syncAction();request();
+        }
+        function finishMistake(){
+          const {id}=failureDemo, alternate=alternateActions[id];
+          mistakeDialog.dataset.mistake=id;
+          el('mistake-title').textContent=alternate.title;
+          el('mistake-explanation').textContent=alternate.explanation;
+          el('mistake-correction').textContent=alternate.correction;
+          mistakeDialog.showModal();
+          retryStep.focus({preventScroll:true});
+        }
+        function retryMistake(){
+          if(!failureDemo) return;
+          resetExperiment(step);
+          enterAction();
+          actionSource.focus({preventScroll:true});
+        }
+        retryStep.addEventListener('click',retryMistake);
+        mistakeDialog.addEventListener('cancel',e=>{e.preventDefault();retryMistake();});
+        function syncAction(){
+          const op=currentAction();
+          const done=assembled&&!op;
+          el('play').hidden=!done;
+          el('play').disabled=!done;
+          previousStep.hidden=!assembled;
+          previousStep.disabled=!assembled||step===0;
+          verificationButton.hidden=!done||step!==verificationStep;
+          confirmBubbles.hidden=!assembled||op?.kind!=='confirm-bubbles'||!!reaction||!!failureDemo;
+          if(!confirmBubbles.hidden) el('confirm-bubbles-text').textContent=step===collectionStep?'确认气泡均匀':'确认气密性良好';
+          actionOverlay.hidden=!assembled;
+          el('lines').toggleAttribute('hidden',!done);
+          if(!assembled) return;
+          const manual=!!op?.source&&!reaction&&!failureDemo, preheating=manual&&op.kind==='preheat';
+          const alternate=manual&&currentAlternate()?.[1];
+          actionOverlay.dataset.kind=failureDemo?'mistake':done?'complete':preheating?'preheat':manual?'drag':'observe';
+          alternateSource.hidden=!alternate;
+          alternateDestination.hidden=!alternate||!alternateSelected&&!hazardDrag?.alternate;
+          alternateSource.setAttribute('aria-pressed',String(alternateSelected));
+          if(alternate){
+            alternateSource.setAttribute('aria-label','选取'+alternate.source);
+            alternateDestination.setAttribute('aria-label','放到'+alternate.destination);
+            alternateSource.title=alternate.source;
+            alternateDestination.title=alternate.destination;
+          }
+          actionSource.hidden=!manual;
+          actionDestination.hidden=actionLine.hidden=!manual||preheating;
+          preheatTrack.toggleAttribute('hidden',!preheating);
+          actionDestination.classList.toggle('is-near',manual&&heldSource);
+          actionSource.setAttribute('aria-pressed',String(heldSource));
+          actionStep.textContent=done?'实验完成':verifying?'检验氧气':'步骤 '+String(step+1).padStart(2,'0')+' · '+procedure[step][0];
+          if(done){
+            actionMessage.textContent=step>verificationStep?'带火星的小木条复燃，证明收集到的是氧气。':'已先移出导管，再盖灭酒精灯。';
+          } else {
+            actionMessage.textContent=failureDemo?alternateActions[failureDemo.id].observing:reaction?.hint||op.hint;
+          }
+          if(preheating){
+            actionSource.removeAttribute('aria-pressed');
+            actionSource.setAttribute('role','slider');
+            actionSource.setAttribute('aria-label','左右拖动酒精灯预热');
+            actionSource.setAttribute('aria-valuemin','0');
+            actionSource.setAttribute('aria-valuemax','100');
+            actionSource.title='左右拖动酒精灯预热';
+            updatePreheatGuide();
+          } else {
+            for(const attr of ['role','aria-valuemin','aria-valuemax','aria-valuenow','aria-valuetext']) actionSource.removeAttribute(attr);
+          }
+          if(manual&&!preheating){
+            actionSource.setAttribute('aria-label','选取'+op.source);
+            actionSource.title=op.source;
+            actionDestination.setAttribute('aria-label','放到'+op.destination);
+            actionDestination.title=op.destination;
+          }
+        }
+        function runReaction(end,seconds,hint=null){
+          reaction={from:time,end,start:performance.now(),seconds,hint};
+          syncAction();request();
+        }
+        function enterAction(){
+          const op=currentAction();
+          if(op){
+            time=op.start;
+            if(op.kind==='confirm-bubbles') steadyAt=performance.now();
+            if(!op.source&&op.kind!=='confirm-bubbles'){
+              const shorten=reduced.matches&&op.kind!=='observe-bubbles';
+              runReaction(op.end,shorten?.26:op.seconds??1.65);
+              return;
+            }
+          } else time=0;
+          syncAction();request();
+        }
+        function advanceAction(){
+          const keyboard=!freeMode&&(document.activeElement===actionSource||document.activeElement===actionDestination||reaction?.keyboard);
+          reaction=null;heldSource=false;alternateSelected=false;actionIndex++;
+          if(actionIndex>=actions[step].length){
+            step++;actionIndex=0;refreshProcedure();
+          }
+          enterAction();
+          if(keyboard&&reaction) reaction.keyboard=true;
+          else if(keyboard) (finished()?el('play'):currentAction()?.source?actionSource:confirmBubbles).focus({preventScroll:true});
+        }
+        function acceptAction(){
+          const op=currentAction();
+          if(!op?.source||op.kind==='preheat'||reaction||failureDemo) return;
+          let outcome=null;
+          if(step===0) outcome='观察导管口是否冒出气泡。';
+          if(step===1&&actionIndex===1) outcome='观察药粒滑到试管底部。';
+          if(step===verificationStep&&actionIndex===1) outcome='观察带火星的小木条是否复燃。';
+          const keyboard=document.activeElement===actionDestination||document.activeElement===actionSource;
+          if(op.finish===time){advanceAction();return;}
+          runReaction(op.finish,reduced.matches?.20:Math.max(.19,Math.min(1.30,(op.finish-time)*.83)),outcome);
+          reaction.keyboard=keyboard;
+        }
+        function updatePreheatGuide(){
+          const percent=Math.round(100*(preheatX-preheatMin)/(preheatMax-preheatMin));
+          actionSource.setAttribute('aria-valuenow',String(percent));
+          actionSource.setAttribute('aria-valuetext',preheatVisited===3?'两端已到达':preheatVisited===1?'已到达管底一侧':preheatVisited===2?'已到达靠近管口的一侧':'在两端之间移动');
+          preheatEdges.forEach((point,i)=>point.classList.toggle('is-visited',!!(preheatVisited&(1<<i))));
+        }
+        function setPreheatX(x){
+          preheatX=U.clamp(x,preheatMin,preheatMax);
+          const sweepMargin=freeMode?.18:.06;
+          if(preheatX-preheatMin<sweepMargin) preheatVisited|=1;
+          if(preheatMax-preheatX<sweepMargin) preheatVisited|=2;
+          updatePreheatGuide();
+          request();
+        }
+        function layoutPreheat(){
+          const left=coords(lampGrip.clone().setX(preheatMin));
+          const right=coords(lampGrip.clone().setX(preheatMax));
+          const visible=onCanvas(left)&&onCanvas(right);
+          actionSource.style.visibility=preheatTrack.style.visibility=visible?'':'hidden';
+          if(!visible){preheatGuide=null;return;}
+          const dx=right[0]-left[0],dy=right[1]-left[1],projected=Math.hypot(dx,dy);
+          const [ux,uy]=projected>=8?[dx/projected,dy/projected]:[1,0];
+          const span=freeMode?Math.max(26,projected):Math.max(48,projected+10);
+          const cx=U.clamp((left[0]+right[0])/2,30+span/2,width-30-span/2);
+          const baseY=x=>coords(lampGrip.clone().set(x,0,lampGrip.z))[1];
+          const halfHeight=Math.abs(uy)*span/2;
+          const cy=U.clamp(Math.max(baseY(preheatMin),baseY(preheatMax))+19+halfHeight,30+halfHeight,height-27-halfHeight);
+          const ratio=(preheatX-preheatMin)/(preheatMax-preheatMin);
+          const from=[cx-ux*span/2,cy-uy*span/2];
+          const handle=[from[0]+ux*span*ratio,from[1]+uy*span*ratio];
+          const to=[from[0]+ux*span,from[1]+uy*span];
+          drawGuide(preheatLine,from,to);
+          drawPoint(preheatEdges[0],from);drawPoint(preheatEdges[1],to);
+          actionSource.style.left=handle[0]+'px';actionSource.style.top=handle[1]+'px';
+          preheatGuide={ux,uy,span,sourcePoint:coords(lampGrip.clone().setX(preheatX))};
+        }
+        function layoutAction(){
+          const op=currentAction(), margin=24;
+          actionHint.style.left='10px';
+          actionHint.style.top='10px';
+          if(!op?.source||op.kind==='preheat'||reaction||failureDemo) return;
+          const from=coords(op.from),to=coords(op.to),visible=onCanvas(from)&&onCanvas(to);
+          actionSource.style.visibility=actionDestination.style.visibility=actionLine.style.visibility=visible?'':'hidden';
+          const keepButtonInView=([x,y])=>[U.clamp(x,margin,width-margin),U.clamp(y,margin,height-margin)];
+          const sourcePoint=freeMode?from:keepButtonInView(from), b=freeMode?to:keepButtonInView(to);
+          const a=!freeMode&&step===0
+            ? [U.clamp(sourcePoint[0]+(width<520?35:46),margin,width-margin),Math.max(margin,sourcePoint[1]-13)]
+            : sourcePoint;
+          if(!freeMode&&Math.hypot(b[0]-a[0],b[1]-a[1])<49){
+            const choices=[[a[0]+52,a[1]],[a[0]-52,a[1]],[a[0],a[1]+52],[a[0],a[1]-52]];
+            const valid=choices.filter(([x,y])=>x>=margin&&x<=width-margin&&y>=margin&&y<=height-margin);
+            valid.sort((c,d)=>Math.hypot(c[0]-b[0],c[1]-b[1])-Math.hypot(d[0]-b[0],d[1]-b[1]));
+            if(valid.length) [b[0],b[1]]=valid[0];
+          }
+          layoutAlternate([a,b],keepButtonInView);
+          if(!visible) return;
+          const hintW=actionHint.offsetWidth,hintH=actionHint.offsetHeight;
+          const corners=[[10,10],[width-hintW-10,10],[10,height-hintH-10],[width-hintW-10,height-hintH-10]];
+          const crowd=([left,top])=>[a,b].filter(([x,y])=>x+26>left&&x-26<left+hintW&&y+26>top&&y-26<top+hintH).length;
+          const hintCorner=corners.find(c=>crowd(c)===0)||corners[0];
+          actionHint.style.left=hintCorner[0]+'px';actionHint.style.top=hintCorner[1]+'px';
+          const visibleSource=actionTouch?.point||a;
+          for(const [btn,[x,y]] of [[actionSource,visibleSource],[actionDestination,b]]){
+            btn.style.left=x+'px';btn.style.top=y+'px';
+          }
+          const dx=b[0]-visibleSource[0],dy=b[1]-visibleSource[1];
+          actionLine.style.left=visibleSource[0]+'px';actionLine.style.top=visibleSource[1]+'px';
+          actionLine.style.width=Math.hypot(dx,dy)+'px';
+          actionLine.style.transform='rotate('+Math.atan2(dy,dx)+'rad)';
+          return {a,b,sourcePoint};
+        }
+        function layoutAlternate(occupied,keepInView){
+          const entry=currentAlternate();
+          if(!entry) return;
+          const [id,op]=entry;
+          const from=coords(op.from),to=coords(op.to);
+          alternateSource.style.visibility=onCanvas(from)?'':'hidden';
+          alternateDestination.style.visibility=onCanvas(to)?'':'hidden';
+          const distance=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
+          const place=(anchor,avoid)=>{
+            const candidates=[[0,0],[42,0],[-42,0],[0,42],[0,-42],[34,34],[-34,34],[34,-34],[-34,-34]]
+              .map(([dx,dy])=>keepInView([anchor[0]+dx,anchor[1]+dy]));
+            const cost=p=>distance(p,anchor)+avoid.reduce((sum,point)=>sum+8*Math.max(0,43-distance(p,point)),0);
+            return candidates.reduce((best,p)=>cost(p)<cost(best)?p:best);
+          };
+          const a=freeMode?from:place(from,occupied);
+          const b=freeMode?to:place(to,[...occupied,a]);
+          const onScreen=actionTouch?.alternate&&actionTouch.point?actionTouch.point:a;
+          for(const [btn,[x,y]] of [[alternateSource,onScreen],[alternateDestination,b]]){
+            btn.style.left=x+'px';btn.style.top=y+'px';
+          }
+          return {id,from,to,a,b};
+        }
+        function onCanvas([x,y]){return x>=0&&x<=width&&y>=0&&y<=height;}
+        const gripRay=new T.Raycaster(), gripPoint=new T.Vector2();
+        function freeGrip(x,y,type,main,alternate){
+          const objects=[];
+          for(const [id,roots] of [['main',main],['alternate',alternate]]){
+            for(const root of roots){
+              let visible=true;
+              for(let parent=root;parent;parent=parent.parent) visible&&=parent.visible;
+              if(visible) root.traverseVisible(mesh=>{if(mesh.isMesh&&!mesh.userData.contactShadow) objects.push({id,mesh});});
+            }
+          }
+          const meshes=objects.map(({mesh})=>mesh);
+          const slop=type==='touch'?14:8;
+          for(const [dx,dy] of [[0,0],[slop,0],[-slop,0],[0,slop],[0,-slop]]){
+            gripPoint.set(2*(x+dx)/width-1,1-2*(y+dy)/height);
+            gripRay.setFromCamera(gripPoint,camera);
+            const hit=gripRay.intersectObjects(meshes,false)[0];
+            if(hit) return objects.find(({mesh})=>mesh===hit.object).id;
+          }
+        }
+        function freeDrop(from,to,dx,dy,type){
+          const vx=to[0]-from[0],vy=to[1]-from[1],span=Math.hypot(vx,vy);
+          const moved=Math.hypot(dx,dy);
+          if(moved<(type==='touch'?10:8)) return false;
+          const along=span>.01?(dx*vx+dy*vy)/span:moved;
+          const across=span>.01?Math.abs(dx*vy-dy*vx)/span:0;
+          const padding=type==='touch'?9:0;
+          if(span<10) return moved<=46+padding&&(span<3||along>=0);
+          return along>=Math.max(5,span*.44)&&along<=span+Math.max(34,span*.6)+padding
+            &&across<=Math.max(24,Math.min(84,span*.48))+padding;
+        }
+        function clearActionDrag(){
+          const held=actionTouch;
+          actionTouch=null;
+          if(held&&held.target.hasPointerCapture(held.id)) held.target.releasePointerCapture(held.id);
+          hazardDrag=null;
+          delete actionOverlay.dataset.dragging;
+          actionDestination.classList.remove('is-near');
+          alternateDestination.classList.remove('is-near');
+        }
+        function actionPointerDown(e,handle){
+          const op=currentAction();
+          if(!assembled||!op?.source||reaction||failureDemo||actionTouch||e.button!==0) return false;
+          const bounds=stage.getBoundingClientRect(), x=e.clientX-bounds.left,y=e.clientY-bounds.top;
+          if(op.kind==='preheat'){
+            layoutPreheat();
+            if(!preheatGuide||!handle&&(freeMode
+              ? !freeGrip(x,y,e.pointerType,[lampBodyGroup],[])&&Math.hypot(x-preheatGuide.sourcePoint[0],y-preheatGuide.sourcePoint[1])>20
+              : Math.hypot(x-preheatGuide.sourcePoint[0],y-preheatGuide.sourcePoint[1])>29)) return false;
+            e.preventDefault();
+            e.currentTarget.setPointerCapture(e.pointerId);
+            actionTouch={id:e.pointerId,target:e.currentTarget,x,y,preheat:true,preheatX,preheatVisited,guide:preheatGuide};
+            return true;
+          }
+          const from=coords(op.from),to=coords(op.to);
+          const path=freeMode?{a:from,b:to,sourcePoint:from}:layoutAction();
+          if(!path) return false;
+          const altEntry=currentAlternate();
+          const alt=altEntry?{id:altEntry[0],from:coords(altEntry[1].from),to:coords(altEntry[1].to)}:null;
+          const mainDistance=Math.hypot(x-path.sourcePoint[0],y-path.sourcePoint[1]);
+          const altDistance=alt?Math.hypot(x-alt.from[0],y-alt.from[1]):Infinity;
+          const hit=freeMode&&!handle?freeGrip(x,y,e.pointerType,freeSources[step]?.[actionIndex]||[],alt?freeAlternateSources[alt.id]:[]):null;
+          const reach=e.pointerType==='touch'?25:18;
+          const alternate=alt&&(handle==='alternate'||!handle&&(hit==='alternate'||!hit&&altDistance<reach&&altDistance<mainDistance));
+          if(handle==='alternate'&&!alternate||!handle&&!alternate&&hit!=='main'&&mainDistance>(freeMode?reach:39)) return false;
+          e.preventDefault();
+          e.currentTarget.setPointerCapture(e.pointerId);
+          actionTouch={id:e.pointerId,target:e.currentTarget,x,y,...path,point:null,near:false,alternate:alternate?alt:null};
+          if(alternate){
+            hazardDrag={alternate:true,id:alt.id};
+            alternateSelected=false;heldSource=false;
+            syncAction();request();
+          }
+          return true;
+        }
+        function actionPointerMove(e){
+          const f=actionTouch;
+          if(f?.id!==e.pointerId) return;
+          const bounds=stage.getBoundingClientRect(), x=e.clientX-bounds.left,y=e.clientY-bounds.top;
+          if(f.preheat){
+            if(!f.moved&&Math.hypot(x-f.x,y-f.y)<4) return;
+            f.moved=true;
+            actionOverlay.dataset.dragging='';
+            const {ux,uy,span}=f.guide;
+            const travel=((x-f.x)*ux+(y-f.y)*uy)/span;
+            setPreheatX(f.preheatX+travel*(preheatMax-preheatMin));
+            return;
+          }
+          if(!f.point&&Math.hypot(x-f.x,y-f.y)<5) return;
+          actionOverlay.dataset.dragging='';
+          if(f.alternate){
+            const alt=f.alternate;
+            const px=alt.from[0]+x-f.x,py=alt.from[1]+y-f.y;
+            f.point=[px,py];
+            f.near=freeDrop(alt.from,alt.to,x-f.x,y-f.y,e.pointerType);
+            const dx=alt.to[0]-alt.from[0],dy=alt.to[1]-alt.from[1];
+            const progress=U.clamp(((x-f.x)*dx+(y-f.y)*dy)/Math.max(1,dx*dx+dy*dy),0,1);
+            const reference=alternateActions[alt.id].from;
+            const depth=reference.clone().project(camera).z;
+            const delta=V(2*(alt.from[0]+x-f.x)/width-1,1-2*(alt.from[1]+y-f.y)/height,depth).unproject(camera).sub(reference);
+            hazardDrag={alternate:true,id:alt.id,cap:progress,stopperOffset:delta,lampOffset:delta};
+            alternateDestination.classList.toggle('is-near',f.near);
+            request();return;
+          }
+          const op=currentAction(), dx=f.b[0]-f.a[0],dy=f.b[1]-f.a[1];
+          const px=f.a[0]+x-f.x,py=f.a[1]+y-f.y;
+          const progress=U.clamp(((px-f.a[0])*dx+(py-f.a[1])*dy)/Math.max(1,dx*dx+dy*dy),0,1);
+          f.near=freeMode?freeDrop(f.a,f.b,x-f.x,y-f.y,e.pointerType)
+            :Math.hypot(px-f.b[0],py-f.b[1])<31&&progress>.62;
+          f.point=[U.clamp(px,24,width-24),U.clamp(py,24,height-24)];
+          actionDestination.classList.toggle('is-near',f.near);
+          const mistake=currentAlternate()?.[0];
+          if(mistake==='tilt'){
+            const tilt=.096*(1-((px-f.a[0])*dx+(py-f.a[1])*dy)/Math.max(1,dx*dx+dy*dy));
+            hazardDrag={id:mistake,tilt:U.clamp(tilt,-.18,.44)};
+          } else if(mistake==='cotton'){
+            const depth=op.from.clone().project(camera).z;
+            const offset=V(2*(f.sourcePoint[0]+x-f.x)/width-1,1-2*(f.sourcePoint[1]+y-f.y)/height,depth).unproject(camera).sub(op.from);
+            hazardDrag={id:mistake,cottonOffset:offset};
+          }
+          time=U.lerp(op.start,op.end,progress);
+          request();
+        }
+        function actionPointerEnd(e,drop){
+          const f=actionTouch;
+          if(f?.id!==e.pointerId) return;
+          if(f.preheat){
+            const r=stage.getBoundingClientRect();
+            const onStage=drop&&e.clientX>=r.left&&e.clientX<=r.right&&e.clientY>=r.top&&e.clientY<=r.bottom;
+            if(onStage&&f.moved) actionPointerMove(e);
+            if(!onStage){preheatVisited=f.preheatVisited;setPreheatX(f.preheatX);}
+            suppressActionClick=performance.now()+400;
+            clearActionDrag();
+            if(onStage&&preheatVisited===3) advanceAction();
+            return;
+          }
+          if(f.point&&drop) actionPointerMove(e);
+          suppressActionClick=performance.now()+400;
+          const pose=hazardDrag;
+          const r=stage.getBoundingClientRect();
+          const inView=onCanvas([e.clientX-r.left,e.clientY-r.top]);
+          clearActionDrag();
+          if(f.alternate){
+            alternateDestination.classList.remove('is-near');
+            if(drop&&inView&&f.near){demonstrateMistake(f.alternate.id,pose);return;}
+            alternateSelected=drop&&!f.point;
+            syncAction();request();
+            if(alternateSelected) alternateDestination.focus({preventScroll:true});
+            return;
+          }
+          if(drop&&f.near&&(!freeMode||inView)){acceptAction();return;}
+          if(drop&&inView&&pose?.id==='tilt'&&pose.tilt>.10){
+            demonstrateMistake('tilt',{tilt:pose.tilt});return;
+          }
+          if(drop&&inView&&pose?.id==='cotton'&&f.point&&Math.hypot(f.point[0]-f.a[0],f.point[1]-f.a[1])>25){
+            demonstrateMistake('cotton',{cottonOffset:pose.cottonOffset});return;
+          }
+          time=currentAction().start;
+          if(!f.point&&drop) heldSource=!heldSource;
+          syncAction();request();
+        }
+        actionSource.addEventListener('pointerdown',e=>actionPointerDown(e,true));
+        alternateSource.addEventListener('pointerdown',e=>actionPointerDown(e,'alternate'));
+        document.addEventListener('pointermove',actionPointerMove);
+        document.addEventListener('pointerup',e=>actionPointerEnd(e,true));
+        document.addEventListener('pointercancel',e=>actionPointerEnd(e,false));
+        actionSource.addEventListener('click',e=>{
+          if(currentAction()?.kind==='preheat') return;
+          if(e.detail!==0&&performance.now()<suppressActionClick) return;
+          alternateSelected=false;
+          heldSource=!heldSource;syncAction();
+          if(heldSource) actionDestination.focus({preventScroll:true});
+        });
+        alternateSource.addEventListener('click',e=>{
+          if(e.detail!==0&&performance.now()<suppressActionClick) return;
+          if(!currentAlternate()||reaction||failureDemo) return;
+          heldSource=false;alternateSelected=!alternateSelected;syncAction();request();
+          if(alternateSelected) alternateDestination.focus({preventScroll:true});
+        });
+        alternateDestination.addEventListener('click',()=>{
+          const entry=currentAlternate();
+          if(alternateSelected&&entry) demonstrateMistake(entry[0]);
+        });
+        actionSource.addEventListener('keydown',e=>{
+          if(currentAction()?.kind!=='preheat'||!['ArrowLeft','ArrowRight','Home','End'].includes(e.key)) return;
+          e.preventDefault();
+          const direction=(e.key==='ArrowLeft'?-1:1)*Math.sign(preheatGuide?.ux||1);
+          setPreheatX(e.key==='Home'?preheatMin:e.key==='End'?preheatMax:preheatX+direction*.18);
+          if(preheatVisited===3) advanceAction();
+        });
+        actionDestination.addEventListener('click',()=>{
+          if(heldSource) acceptAction();
+          else actionSource.focus({preventScroll:true});
+        });
+        el('play').addEventListener('click',()=>{
+          if(!assembled||!finished()) return;
+          resetExperiment();
+          refreshProcedure();
+          enterAction();
+          actionSource.focus({preventScroll:true});
+        });
+        verificationButton.addEventListener('click',()=>{
+          if(verificationButton.hidden) return;
+          verifying=true;
+          refreshProcedure();
+          enterAction();
+          if(!freeMode) actionSource.focus({preventScroll:true});
+        });
+        const demoWaterMat=flat(p=>mix(p.water,new T.Color(0x43a9f5),.56),{depthWrite:false});
+        const demoPowderMat=flat(p=>mix(p.purple,p.fg,.15),{depthWrite:false});
+        const demoWater=Array.from({length:24},()=>mesh(dotGeo,demoWaterMat,0,0,0,scene,9));
+        const demoPowder=Array.from({length:19},()=>mesh(crystalGeo,demoPowderMat,0,0,0,scene,9));
+        const demoCrack=new T.Group();
+        for(const points of [
+          [[.20,.28,.15],[.11,.46,.30],[.19,.56,.27],[.05,.75,.33],[-.05,.87,.32]],
+          [[.11,.46,.30],[-.02,.47,.33],[-.16,.34,.28]],
+          [[.05,.75,.33],[.25,.80,.23],[.28,.93,.19]]
+        ]){
+          for(let i=1;i<points.length;i++){
+            const crack=chord(points[i-1],points[i],.014,flat(()=>new T.Color(0x663a39),{depthWrite:false}),demoCrack,10);
+            crack.visible=true;
+          }
+        }
+        tube.add(demoCrack);
+        for(const piece of [...demoWater,...demoPowder,demoCrack]) piece.visible=false;
+        function renderFailureDemo(progress){
+          const id=failureDemo?.id;
+          demoCrack.visible=(id==='tilt'||id==='order')&&progress>=.82;
+          const pipePoint=(t,target)=>{
+            if(t<sleeveStart) return target.copy(pipeRoute.getPoint(t)).applyQuaternion(proximalPipe.quaternion).add(proximalPipe.position);
+            if(t<=sleeveEnd){
+              return target.copy(jointStart).lerp(jointEnd,(t-sleeveStart)/(sleeveEnd-sleeveStart));
+            }
+            return target.copy(bathPipe.curve.getPoint((t-sleeveEnd)/(1-sleeveEnd)));
+          };
+          const tubePoint=(t,target,offset=0)=>target.set(.16,length-.14-(length-.46)*t,.09+offset)
+            .applyQuaternion(tube.quaternion).add(tube.position);
+          demoWater.forEach((drop,i)=>{
+            const position=drop.position;
+            drop.visible=false;
+            if(id==='tilt'&&i<9){
+              const beadProgress=(progress-.16-i*.057)/.57;
+              drop.visible=beadProgress>=0&&beadProgress<1.38;
+              if(drop.visible){
+                const travel=U.smoothstep(beadProgress,.18,.99);
+                tubePoint(travel,position,Math.sin(i*1.8)*.07);
+                position.y+=.05*Math.sin(i*1.8);
+                drop.scale.set(.044+.004*(i%4),.05+.004*(i%3),.045);
+              }
+            } else if(id==='order'){
+              const wave=(progress-.24)/.56-i*.021;
+              drop.visible=wave>=0;
+              if(drop.visible){
+                if(wave<=.67) pipePoint(1-wave/.67,position);
+                else tubePoint(U.clamp((wave-.67)/.33,0,1),position,Math.sin(i*2)*.045);
+                drop.scale.setScalar(i===0?.072:.055);
+              }
+            }
+          });
+          demoPowder.forEach((grain,i)=>{
+            if(id!=='cotton'){grain.visible=false;return;}
+            const travel=(progress-.12-i*.028)/.47;
+            grain.visible=travel>=0;
+            if(!grain.visible) return;
+            if(travel<.56){
+              tubePoint(1-travel/.56,grain.position,Math.sin(i*1.9)*.085);
+              grain.position.y+=Math.sin(i*2.7+travel*8)*.09;
+            } else{
+              const deposited=.25+(i%7)*.026;
+              pipePoint(Math.min((travel-.56)*.68,deposited),grain.position);
+              grain.position.z+=Math.sin(i*1.9)*.039;
+            }
+            grain.rotation.set(i*1.7,travel*2,i*2.3);
+            grain.scale.setScalar(.035+.008*(i%3));
+          });
+        }
+        function model(at) {
+          const demoId=failureDemo?.id;
+          const demoProgress=failureDemo?.progress??0;
+          const simulatedHeat=demoId==='cotton'||demoId==='tilt';
+          drawModel(at,simulatedHeat?3:step,simulatedHeat?heatingAt:demoId==='order'?0:time,demoProgress);
+        }
+        function drawModel(at,step,time,demoProgress) {
+          const demoId=failureDemo?.id;
+          const scope=(i,t)=>step>i||(step===i&&time>=t);
+          const ease=(from,to)=>U.smoothstep(time,from,to);
+          const clampProgress=assembled?(step>2?1:step===2?ease(tiltEnd,heightAt):0):0;
+          const lampZCorrection=tubeZ-lampZ;
+          const lampAimZ=lampZCorrection*clampProgress;
+          const lampAimX=lampX;
+          const tubeBottomAt=x=>closed.y+axis.y*(x-closed.x)/axis.x-tubeRadius/axis.x;
+          const heatingHeight=hotOuterFlameY-tubeBottomAt(lampAimX+.03);
+          const tubeLift=heatingHeight*clampProgress;
+          const preheatOffset=step===3&&assembled&&time>=matchAwayAt?(preheatX-lampX)*(1-ease(preheatedAt,heatingAt)):0;
+          lampBodyGroup.position.set(preheatOffset,0,lampAimZ);
+          if(hazardDrag?.id==='tilt'&&hazardDrag.lampOffset) lampBodyGroup.position.add(hazardDrag.lampOffset);
+          lampShadow.position.x=lampX+.07+lampBodyGroup.position.x;
+          lampShadow.position.z=lampZ-.05+lampBodyGroup.position.z;
+          lampShadow.material.uniforms.contact.value=Math.exp(-2*Math.max(0,lampBodyGroup.position.y));
+          alignedWick.copy(wick).add(V(0,.015,lampZCorrection));
+          lampGrip.z=lampZ+lampZCorrection;
+          preheatGrip.copy(lampGrip).setX(preheatX);
+          capSeatGrip.z=lampGrip.z;
+          heightGripTarget.y=clampGrip.y+heatingHeight;
+          const collecting=step===collectionStep;
+          const p=step<collectionStep?0:step>collectionStep?1:U.clamp((time-fillStart)/(fillEnd-fillStart),0,1);
+          const prep=collecting&&time<prepCapAt;
+          const waterLoaded=collecting?ease(.42,1.37):0;
+          const surface=U.lerp(3.23,.49,p);
+          const inBath=collecting&&time>=fillStart&&time<=fillEnd;
+          const collected=scope(collectionStep,liftAt);
+          const dippingJar=collecting&&time>=prepCapAt&&time<immerseAt;
+          const liftingJar=collecting&&time>=capAt&&time<liftAt;
+          const inTank=collecting&&time>=immerseAt&&time<capAt;
+          const movingJar=dippingJar||liftingJar;
+          const jarTravel=dippingJar?(time-prepCapAt)/(immerseAt-prepCapAt):liftingJar?1-(time-capAt)/(liftAt-capAt):inTank?1:0;
+          const jarMix=U.smoothstep(jarTravel,.20,.78);
+          const jarLift=movingJar?1.12*(U.smoothstep(jarTravel,0,.24)-U.smoothstep(jarTravel,.74,1)):0;
+          const plateSlide=ease(immerseAt,uncoverAt)*(1-ease(outletClearAt,capAt));
+          // Leave room for the glass plate between the lip and the submerged rack.
+          const plateClearOfRack=U.smoothstep(plateSlide,.83,1);
+          const supportLift=plateClearance*(inTank?1-plateClearOfRack:U.smoothstep(jarTravel,.76,1));
+          poseJar(assembled?jarMix:0,assembled?jarLift+supportLift:0);
+          parts[3].xyz.copy(originalJarPin).applyQuaternion(jarGroup.quaternion).add(jarGroup.position);
+          parts[4].xyz.copy(originalLampPin).add(lampBodyGroup.position);
+          const showingWater=assembled&&collecting&&waterLoaded>0&&p<1;
+          if(showingWater) updateJar(prep?U.lerp(3.23,.49,waterLoaded):.49,surface,prep);
+          jarWaterMesh.visible=showingWater;
+          jarSurface.visible=meniscus.visible=showingWater&&(prep||inTank)&&(!inTank||p>0);
+          surfacePatch.visible=!placed.has('jar')||!inTank;
+          const hasLid=assembled&&(dippingJar||scope(collectionStep,capAt)&&!(verifying&&scope(verificationStep,.04)));
+          lid.visible=hasLid;
+          const precapping=assembled&&prep;
+          const movingPlate=assembled&&inTank;
+          const testingPlate=assembled&&verifying&&step===verificationStep&&time>=.04&&time<.92;
+          carriedPlate.visible=precapping||movingPlate||testingPlate;
+          if(precapping){
+            const progress=ease(waterFullAt,prepCapAt);
+            carriedPlate.position.copy(prepPlateRest).lerp(testMouth,progress);
+            carriedPlate.position.y+=.70*Math.sin(Math.PI*progress);
+          }
+          if(movingPlate){
+            carriedPlate.position.copy(jarMouthWet).lerp(waterPlateRest,plateSlide);
+            carriedPlate.position.y=U.lerp(jarMouthWet.y,waterPlateRest.y,plateClearOfRack);
+          }
+          if(testingPlate) carriedPlate.position.copy(testMouth).lerp(plateRest,ease(.04,.92));
+          pitcher.visible=assembled&&prep;
+          pourStream.visible=pitcher.visible&&time>.43&&time<1.34;
+          if(pitcher.visible){
+            const pour=ease(0,.43)*(1-ease(1.34,waterFullAt));
+            pitcher.position.copy(pitcherRest).lerp(pitcherPour,pour);
+            pitcher.rotation.z=1.25*pour;
+            pitcherWater.scale.y=1-.93*waterLoaded;
+            pitcherWater.position.y=.07+.26*pitcherWater.scale.y;
+            if(pourStream.visible){
+              const source=V(-.31,.72,0).applyQuaternion(pitcher.quaternion).add(pitcher.position);
+              const dest=testMouth.clone().add(V(0,-.15,0));
+              pourStream.position.copy(source).lerp(dest,.5);
+              pourStream.quaternion.setFromUnitVectors(V(0,1,0),source.clone().sub(dest).normalize());
+              pourStream.scale.y=source.distanceTo(dest);
+            }
+          }
+
+          const open=assembled&&step===1;
+          const looseStopper=open&&time>=4.83;
+          for(const piece of [stopper,stopperLip,holeEdge]) piece.visible=!open||looseStopper;
+          pipeGroup.visible=placed.has('pipe')&&(!open||looseStopper);
+          inletPipe.visible=sleeveCollars[0].visible=sleeveCollars[1].visible=rubberJoint.visible=distalPipe.visible=!open;
+          const dried=assembled&&scope(removeTubeStep,.75);
+          const useBath=!inBath&&!dried;
+          const inserting=assembled&&collecting&&time>bubblesReadyAt&&time<fillStart;
+          const clearing=assembled&&collecting&&time>fillEnd&&time<outletClearAt;
+          const pulling=assembled&&step===removeTubeStep&&time<.75;
+          const dipping=assembled&&step===2&&time>=heightAt&&time<dipAt;
+          const stagedDry=assembled&&step===2&&time<heightAt;
+          const moving=inserting||clearing||pulling||dipping;
+          if(moving) {
+            if(inserting) bendOutlet(bathPipe.curve,wetPipe,ease(bubblesReadyAt,fillStart),'bottle');
+            if(clearing) bendOutlet(wetPipe,bathPipe.curve,ease(fillEnd,outletClearAt),'clear');
+            if(pulling) bendOutlet(bathPipe.curve,dryPipe.curve,ease(0,.75),'lift');
+            if(dipping) bendOutlet(dryPipe.curve,bathPipe.curve,ease(heightAt,dipAt),'dip');
+          }
+          morphTube.visible=morphTip.visible=moving;
+          collectorTube.visible=outlet.visible=!moving&&!useBath&&!dried;
+          bathPipe.segment.visible=bathPipe.ring.visible=!moving&&useBath&&!stagedDry;
+          dryPipe.segment.visible=dryPipe.ring.visible=!moving&&(dried||stagedDry);
+          const loading=assembled&&step===1;
+          const jawOpening=loading?.18*(ease(.03,.5)-ease(5.56,6.14)):placed.has('tube')?0:.16;
+          jaws[1].position.z=jawOpening;
+          const insert=ease(.40,2.08), out=ease(3.50,4.50);
+          const tips=ease(2.08,2.73)-ease(4.35,5.05);
+          const tiltOffset=demoId==='tilt'?failureDemo.tilt??.17:
+            hazardDrag?.id==='tilt'&&hazardDrag.tilt!=null?hazardDrag.tilt:
+            loading?.096+.205*tips:assembled&&step===2?.096*(1-ease(tiltStart,tiltEnd)):0;
+          const tiltPose=new T.Quaternion().setFromAxisAngle(zAxis,tiltOffset);
+          tube.quaternion.copy(tubeBase).premultiply(tiltPose);
+          tube.position.copy(closed);
+          // The free tube tips during loading; the mounted tube rotates around the clamp.
+          if(!loading&&tiltOffset){
+            tube.position.add(clampOffset).sub(clampOffset.clone().applyQuaternion(tiltPose));
+          }
+          tube.position.y+=tubeLift;
+          tube.position.z+=loading?.38*(ease(.06,.36)-ease(5.56,6.12)):0;
+          clampMount.position.y=tubeLift;
+          const stopperShift=assembled&&step===2?1-ease(0,tiltStart):0;
+          proximalPipe.quaternion.copy(tiltPose);
+          proximalPipe.position.copy(tube.position).sub(closed.clone().applyQuaternion(tiltPose));
+          proximalPipe.position.add(V(.75,.30,.34).multiplyScalar(stopperShift));
+          if(looseStopper){
+            proximalPipe.position.addScaledVector(alternateActions.cotton.from,.99).addScaledVector(alternateActions.cotton.to,-.99);
+            if(hazardDrag?.id==='cotton'&&hazardDrag.stopperOffset) proximalPipe.position.add(hazardDrag.stopperOffset);
+          }
+          updateTankConnection();
+          for(const [i,at] of tubePins) parts[i].xyz.copy(at).applyQuaternion(tiltPose).add(tube.position);
+          for(const [i,at] of inletPins) parts[i].xyz.copy(at).applyQuaternion(tiltPose).add(proximalPipe.position);
+          parts[8].xyz.copy(sleeveMidpoint);
+          chute.visible=loading&&time>.32&&time<4.52;
+          chute.position.y=U.lerp(length+.84,.30,insert)+out*(length+.65);
+          payload.forEach(({grain,destination,y,z},i)=>{
+            const drop=ease(2.48+i*.008,3.03+i*.008);
+            grain.visible=chute.visible&&drop<.997;
+            if(grain.visible) {
+              grain.position.set(floorX-.051,chute.position.y+y,z).lerp(destination,drop);
+              grain.rotation.z=crystals[i].rotation.z+drop*4.3;
+            }
+            crystals[i].visible=assembled&&(step>1||loading&&drop>=.997);
+          });
+          const cottonOffset=demoId==='cotton'?failureDemo.cottonOffset:hazardDrag?.id==='cotton'?hazardDrag.cottonOffset:null;
+          const cottonIn=demoId==='cotton'||cottonOffset?0:loading?ease(4.83,5.52):1;
+          const localCottonOffset=cottonOffset?.clone().applyQuaternion(tube.quaternion.clone().invert());
+          cottonTufts.forEach((ob,i)=>{
+            ob.visible=assembled&&(demoId==='cotton'?!!localCottonOffset&&demoProgress<.16:step>1||loading&&time>=4.83);
+            ob.position.copy(cottonHome[i]);
+            ob.position.y+=(1-cottonIn)*1.14;
+            ob.position.x-=(1-cottonIn)*.35;
+            if(localCottonOffset) ob.position.add(localCottonOffset);
+            ob.scale.setScalar(.08+cottonIn*.023);
+          });
+          parts[0].relevant=crystals[0].visible;parts[7].relevant=cottonTufts[0].visible;
+          parts[1].relevant=parts[2].relevant=parts[8].relevant=!open;
+
+          towel.visible=assembled&&step===0;
+          towel.position.copy(towelStart).lerp(towelEnd,ease(0,.74));
+          const towelContact=ease(0,.74);
+          towel.rotation.set(.12*(1-towelContact),.08*(1-towelContact),-.14+.045*towelContact);
+          const flameClock=reduced.matches?0:at*.001;
+          matchBox.visible=match.visible=assembled&&step===3&&!demoId;
+          if(match.visible){
+            const contactAt=.27, sparksAt=.69, sparksOut=.97;
+            if(time<contactAt){
+              match.position.copy(matchStart).lerp(matchStripStart,ease(0,contactAt));
+              matchShaft.rotation.z=U.lerp(-1.10,-1.33,ease(0,contactAt));
+            } else if(time<strikeAt){
+              match.position.copy(matchStripStart).lerp(matchStripEnd,ease(contactAt,strikeAt));
+              matchShaft.rotation.z=-1.33-.12*ease(contactAt,strikeAt);
+            } else if(time<litAt){
+              const u=ease(strikeAt,litAt);
+              match.position.copy(matchStripEnd).lerp(alignedWick,u);
+              match.position.y+=.65*Math.sin(Math.PI*u);
+              matchShaft.rotation.z=U.lerp(-1.45,-1.11,u);
+            } else {
+              const u=ease(litAt,matchAwayAt);
+              match.position.copy(alignedWick).lerp(matchDiscard,u);
+              match.position.y+=.42*Math.sin(Math.PI*u);
+              matchShaft.rotation.z=U.lerp(-1.11,-Math.PI*.5,u);
+            }
+            matchFire.visible=time>=sparksAt&&time<litAt+.27;
+            if(matchFire.visible){
+              const strength=ease(sparksAt,strikeAt)*(1-ease(litAt+.14,litAt+.27));
+              matchFlame.visible=true;
+              matchFlame.material.uniforms.clock.value=flameClock;
+              matchFlame.material.uniforms.glow.value=strength;
+              matchFire.scale.set(.34+.26*strength,.16+.28*strength,.34+.26*strength);
+            }
+            matchHead.material=time<litAt+.27?unstruck:charred;
+            const sparksLive=time>=sparksAt&&time<sparksOut;
+            const scatter=ease(sparksAt,sparksOut);
+            for(let i=0;i<matchSparks.length;i++){
+              const spark=matchSparks[i];
+              spark.visible=sparksLive;
+              if(sparksLive){
+                spark.position.set((-1+i*.20)*scatter,(.10+i%3*.12)*scatter-.13*scatter*scatter,.042+i*.016*scatter);
+                spark.scale.setScalar((.036+(i%3)*.012)*(1-.58*scatter));
+              }
+            }
+          }
+          lampCap.visible=placed.has('lamp');
+          const capProgress=demoId==='order'||step>extinguishStep?1:step===extinguishStep?ease(0,.84):0;
+          lampCap.position.copy(capRest).lerp(V(lampX,burnerSeat,lampZ+lampAimZ),capProgress);
+          lampCap.position.y+=.75*Math.sin(Math.PI*capProgress);
+          if(hazardDrag?.id==='order'&&hazardDrag.lampOffset) lampCap.position.add(hazardDrag.lampOffset);
+          splint.visible=assembled&&verifying&&scope(verificationStep,.92);
+          const down=step>verificationStep?1:ease(.92,1.81);
+          splint.position.copy(splintRest).lerp(V(laterJar.x,2.66,laterJar.z),down);
+          splint.rotation.z=.17;
+          if(splint.visible){
+            const strength=step>verificationStep?1:ease(1.81,2.10);
+            splintFlame.visible=strength>.008;
+            splintFlame.material.uniforms.clock.value=flameClock;
+            splintFlame.material.uniforms.glow.value=strength;
+            splintFire.rotation.z=-splint.rotation.z;
+            splintFire.scale.set(.68+.22*strength,.29+.35*strength,.68+.22*strength);
+            emberMaterial.opacity=(.62+.19*(1-strength))*(.93+.07*Math.sin(flameClock*8.4));
+          }
+          const active=assembled&&demoId!=='order'&&scope(3,litAt)&&!scope(extinguishStep,.84);
+          const lampGlow=active?(step===3?.35+.65*ease(litAt,litAt+.25):1-ease(.58,.84)*(step===extinguishStep?1:0)):0;
+          flame.visible=active;
+          lampFlame.visible=active;
+          lampFlame.material.uniforms.clock.value=flameClock;
+          lampFlame.material.uniforms.glow.value=lampGlow;
+          flameLight.position.copy(flame.position).add(lampBodyGroup.position);
+          flameLight.position.y+=.55;
+          flameLight.intensity=lampGlow*(.79+.048*Math.sin(flameClock*7.6)+.028*Math.sin(flameClock*11.2));
+          // The glass limits the visible height of the flame along the sloped tube.
+          const outerScale=U.clamp((tubeBottomAt(lampAimX+.03+preheatOffset)+tubeLift-flame.position.y)/.93,.62,1);
+          flame.scale.set(1,outerScale,1);
+          for(let i=0;i<dots.length;i++){
+            const u=(time-1.09)*5.2-i*.56;
+            const d=u%7.9;
+            const ob=dots[i];
+            ob.visible=assembled&&collecting&&u>=0&&time<fillEnd;
+            if(ob.visible){
+              if(d<2.25) ob.position.copy(seedPoint).lerp(routePoints[0],d/2.25)
+                .applyQuaternion(tiltPose).add(proximalPipe.position);
+              else {
+                const t=U.clamp((d-2.25)/5.65,0,1);
+                if(t<=sleeveStart) ob.position.copy(pipeRoute.getPoint(t)).applyQuaternion(tiltPose).add(proximalPipe.position);
+                else if(t<sleeveEnd) ob.visible=false;
+                else {
+                  const route=moving?outletBlend:useBath?bathPipe.curve:wetPipe;
+                  ob.position.copy(route.getPoint((t-sleeveEnd)/(1-sleeveEnd)));
+                }
+              }
+              ob.scale.setScalar(i%3===0?.07:.049);
+            }
+          }
+          const waitingForBubbles=collecting&&time>=uncoverAt&&time<bubblesReadyAt;
+          const steadyBubbles=collecting&&time>=bubblesReadyAt&&time<=fillEnd;
+          const leakConfirmedReady=step===0&&currentAction()?.kind==='confirm-bubbles';
+          const leakElapsed=step===0?Math.max(0,time-.61)+(leakConfirmedReady?Math.max(0,(at-steadyAt)/1000):0):0;
+          const highlightBubbles=step===0&&time>=1.68||collecting&&time>=uncoverAt&&time<=bubblesReadyAt;
+          const bubbleTime=waitingForBubbles?time-uncoverAt:
+            inBath?time-fillStart:time>=bubblesReadyAt?bubblesReadyAt-uncoverAt+Math.max(0,(at-steadyAt)/1000):0;
+          const regularAfter=1.65, bubbleSpacing=.22;
+          const sparseAt=[.17,.76,1.39];
+          for(let i=0;i<bubbles.length;i++){
+            const checking=step===0&&time>.61;
+            const emits=waitingForBubbles||steadyBubbles;
+            const sparse=waitingForBubbles&&bubbleTime<regularAfter;
+            const elapsed=checking?leakElapsed-i*.20:sparse?bubbleTime-(sparseAt[i]??Infinity):
+              bubbleTime-(inBath?0:regularAfter)-i*bubbleSpacing;
+            const age=sparse?elapsed:elapsed%(bubbles.length*bubbleSpacing);
+            const start=inBath?mouthWet:inserting?morphTip.position:bathPipe.end;
+            const y=start.y+age*(checking?.58:inBath?1.38:.88);
+            const ob=bubbles[i];
+            ob.visible=assembled&&(checking||emits)&&elapsed>=0&&y<(inBath?surface-.025:poolLevel+.04);
+            if(ob.visible){
+              const s=y-start.y;
+              ob.position.set(start.x+Math.sin(s*5+i*2.25)*Math.min(.18,s*.14),y,start.z+Math.cos(s*4+i)*Math.min(.16,s*.12));
+              ob.children[1].material=highlightBubbles?highlightedBubbleRim:bubbleRim;
+              ob.scale.setScalar(highlightBubbles?.075+(i%3)*.013:.044+(i%4)*.018);
+              ob.quaternion.copy(camera.quaternion);
+            }
+          }
+          renderFailureDemo(demoProgress);
+          gasLabel.hidden=!assembled||p<.30||verifying&&scope(verificationStep,.92);
+          if(!gasLabel.hidden) {
+            const [x,y]=coords(collected?V(laterJar.x,1.42,laterJar.z):V(jarX,(3.23+surface)*.5,jarZ).applyQuaternion(jarGroup.quaternion).add(jarGroup.position));
+            gasLabel.hidden=x<14||x>width-14||y<12||y>height-12;
+            gasLabel.style.transform='translate('+x+'px,'+y+'px) translate(-50%,-50%)';
+          }
+          const complete=[0,1,2,3,17,19,8,9,11];
+          let next=complete[step];
+          if(step===0&&time>.85)next=1;
+          if(step===1&&time>.30)next=time<2.37?12:time<3.58?13:time<5.56?14:2;
+          if(step===2&&time>=heightAt)next=time<dipAt?15:3;
+          if(step===3&&time>=litAt)next=time<matchAwayAt?4:16;
+          if(collecting&&time>=uncoverAt)next=time<bubblesReadyAt?18:time<fillStart?5:time<fillEnd?6:time<liftAt?7:19;
+          if(step===removeTubeStep&&time>=.75)next=8;
+          if(step===extinguishStep&&time>=.84)next=9;
+          if(verifying&&step===verificationStep&&time>1.02)next=time<1.81?10:11;
+          if(!demoId&&phase!==next){phase=next;if(assembled) updateNote();}
+        }
+        let lastFrame=0, flameFrameTimer=0;
+        function frame(at){
+          raf=0;
+          if(!width||!height) return;
+          if(reaction){
+            const progress=U.clamp((at-reaction.start)/(1000*reaction.seconds),0,1);
+            time=U.lerp(reaction.from,reaction.end,progress);
+            if(progress>=1) advanceAction();
+          }
+          if(failureDemo&&failureDemo.progress<1){
+            failureDemo.progress=Math.min(1,Math.max(0,(at-failureDemo.at)/(alternateActions[failureDemo.id].seconds*1000)));
+            if(failureDemo.progress===1) finishMistake();
+          }
+          const edgeInput=(point,size)=>U.clamp((30-point)/30,0,1)-U.clamp((point-size+30)/30,0,1);
+          const atEdge=drag?.inside&&drag.edgeReady&&!drag.hit;
+          const edgeX=atEdge?edgeInput(drag.pointer.x,width):0,edgeY=atEdge?edgeInput(drag.pointer.y,height):0;
+          const scrolling=edgeX!==0||edgeY!==0;
+          if(scrolling) {
+            const speed=.32*Math.min(24,Math.max(0,at-lastFrame));
+            panCanvas(edgeX*speed,edgeY*speed);
+          }
+          lastFrame=at;
+          positionCamera();
+          if(scrolling) updateDragPosition();
+          model(at);
+          if(loose){
+            const group=apparatus.get(loose.slot.id);
+            if(group===jarGroup) group.position.add(loose.delta);
+            else group.position.copy(loose.delta);
+            group.visible=true;
+          }
+          const jarCenter=jarPivot.clone().applyQuaternion(jarGroup.quaternion).add(jarGroup.position);
+          jarShadow.visible=jarGroup.visible;
+          jarShadow.position.x=jarCenter.x+.09;
+          jarShadow.position.z=jarCenter.z-.08;
+          jarShadow.material.uniforms.contact.value=Math.exp(-1.5*Math.max(0,jarCenter.y-jarRestPivot.y));
+          if(tube.visible||lampGroup.visible||jarGroup.visible||apparatus.get('tank').visible){
+            // Render a smaller view without refractive shells, then sample it through each glass wall.
+            const scale=Math.min(.72,690/width);
+            const captureWidth=Math.max(1,Math.round(width*scale));
+            const captureHeight=Math.max(1,Math.round(height*scale));
+            refractionTarget.setSize(captureWidth,captureHeight);
+            glassCapture.value=true;
+            glassSource.value=null;
+            renderer.setRenderTarget(refractionTarget);
+            renderer.render(scene,camera);
+            renderer.setRenderTarget(null);
+            glassCapture.value=false;
+            glassSource.value=refractionTarget.texture;
+            glassRefractionEnabled.value=true;
+          }
+          renderer.render(scene,camera);
+          glassRefractionEnabled.value=false;
+          if(assembled){
+            if(finished()) layoutPins(); else parts.forEach(p=>{p.btn.hidden=true;});
+            if(currentAction()?.kind==='preheat'&&!reaction) layoutPreheat();
+            else layoutAction();
+          } else layoutTargets();
+          const liveFlame=!reduced.matches&&(flame.visible||match.visible&&matchFire.visible||splint.visible);
+          const op=currentAction();
+          const liveBubbles=assembled&&(op?.kind==='confirm-bubbles'||step===collectionStep&&op?.start===bubblesReadyAt);
+          if(scrolling||reaction||failureDemo&&failureDemo.progress<1||liveBubbles) request();
+          else if(liveFlame&&!raf) flameFrameTimer=setTimeout(request,32);
+        }
+        function request(){
+          if(flameFrameTimer){
+            clearTimeout(flameFrameTimer);
+            flameFrameTimer=0;
+          }
+          if(!raf) raf=requestAnimationFrame(frame);
+        }
+        scene.add(pitcher);
+        lampGroup.add(matchBox,match,lampCap);
+        phase=0;
+        for(const name of ['pan','orbit','zoom-in','zoom-out','home']) el(name).disabled=false;
+        updateAssembly();
+        assemblyNote('当前：'+nextInstrument().name+'。');
+        el('fallback').hidden=true;
+      }
+    })();
