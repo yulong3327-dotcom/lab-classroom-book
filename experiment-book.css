@@ -272,14 +272,14 @@
   overflow: hidden;
 }
 
-.book-video :is(iframe, video) {
+.book-video video {
   display: block;
   width: 100%;
-  height: 100%;
-  border: 0;
+  height: auto;
+  border-radius: 8px;
   object-fit: contain;
   background: #101623;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: 25 / 16;
 }
 
 .book-video-placeholder::before {

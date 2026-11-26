@@ -12,6 +12,7 @@ export const lessons = {
     subject: '化学 · 气体制取',
     title: '高锰酸钾分解制取氧气',
     url: './lab/',
+    video: './media/oxygen-animation.mp4',
     summary: '组装制氧装置，观察气泡和水面变化，用排水法收集氧气。',
     instruments: ['铁架台', '试管', '酒精灯', '带塞导管', '水槽', '集气瓶', '毛巾', '火柴', '棉花', '带火星的木条'],
     reagents: '药品　高锰酸钾',
@@ -67,9 +68,33 @@ export function setupExperimentBook(onStart) {
   const dialog = el('experiment-book');
   const index = el('book-index');
   const details = el('book-details');
+  const video = el('book-video-player');
+  const videoPlaceholder = el('book-video-placeholder');
+  const videoMessage = videoPlaceholder.firstElementChild;
   const entryButtons = [...dialog.querySelectorAll('[data-experiment]')];
   let current = null;
   let trigger = null;
+
+  function clearVideo() {
+    if (!video.hasAttribute('src')) return;
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+  }
+
+  function setVideo(source) {
+    video.hidden = !source;
+    videoPlaceholder.hidden = Boolean(source);
+    videoMessage.textContent = '视频待补充';
+    if (source) video.src = source;
+  }
+
+  video.addEventListener('error', () => {
+    if (!video.hasAttribute('src') || !video.error) return;
+    video.hidden = true;
+    videoMessage.textContent = '视频暂时无法播放';
+    videoPlaceholder.hidden = false;
+  });
 
   function show(view) {
     dialog.dataset.view = view;
@@ -77,7 +102,10 @@ export function setupExperimentBook(onStart) {
     details.hidden = view !== 'detail';
     el('book-back').hidden = view !== 'detail';
     dialog.setAttribute('aria-labelledby', view === 'index' ? 'book-index-title' : 'book-title');
-    if (view === 'index') index.scrollTop = 0;
+    if (view === 'index') {
+      clearVideo();
+      index.scrollTop = 0;
+    }
     if (view === 'detail') details.scrollTop = 0;
   }
   function fillList(node, values) {
@@ -100,6 +128,7 @@ export function setupExperimentBook(onStart) {
     el('book-free').hidden = !lesson.freeUrl;
     fillList(el('book-instruments'), lesson.instruments);
     fillList(el('book-steps'), lesson.steps);
+    setVideo(lesson.video);
     show('detail');
     el('book-title').focus({ preventScroll: true });
   });
@@ -110,6 +139,7 @@ export function setupExperimentBook(onStart) {
   for (const button of dialog.querySelectorAll('[data-book-close]')) button.addEventListener('click', () => dialog.close());
   dialog.addEventListener('close', () => {
     if (dialog.open) return;
+    clearVideo();
     trigger?.focus({ preventScroll: true });
     trigger = null;
   });
